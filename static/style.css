@@ -1,0 +1,504 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+:root {
+    --felt: #0d5a2d;
+    --felt-dark: #062615;
+    --glass-bg: rgba(255, 255, 255, 0.07);
+    --glass-border: rgba(255, 255, 255, 0.12);
+    --gold: #f0c850;
+    --gold-dim: #b8942e;
+    --red: #e74c3c;
+    --green: #2ecc71;
+    --white: #ffffff;
+    --text: #e8e8e8;
+    --text-dim: rgba(255, 255, 255, 0.6);
+    --card-width: clamp(60px, 10vw, 85px);
+    --card-height: clamp(84px, 14vw, 120px);
+}
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--felt-dark);
+    color: var(--text);
+    min-height: 100vh;
+    overflow: hidden;
+}
+
+.table {
+    min-height: 100vh;
+    background: radial-gradient(ellipse at 50% 40%, var(--felt) 0%, var(--felt-dark) 70%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.game-container {
+    width: 100%;
+    max-width: 700px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    align-items: center;
+}
+
+/* Glass panels */
+.glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* Balance */
+.balance-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 24px;
+    font-size: 14px;
+}
+
+.balance-label {
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.balance-amount {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--gold);
+}
+
+/* Hand areas */
+.dealer-area,
+.player-area {
+    width: 100%;
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+}
+
+.hand-label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    font-weight: 500;
+}
+
+.hand-total {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--white);
+    min-width: 32px;
+    text-align: center;
+}
+
+.cards {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: var(--card-height);
+    align-items: center;
+}
+
+/* Playing cards */
+.card {
+    width: var(--card-width);
+    height: var(--card-height);
+    border-radius: 8px;
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 0.5s ease;
+    animation: dealCard 0.4s ease-out backwards;
+}
+
+.card.flip {
+    animation: flipCard 0.6s ease forwards;
+}
+
+.card-face {
+    position: absolute;
+    inset: 0;
+    border-radius: 8px;
+    backface-visibility: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 6px 8px;
+    background: white;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.card-back {
+    position: absolute;
+    inset: 0;
+    border-radius: 8px;
+    backface-visibility: hidden;
+    transform: rotateY(180deg);
+    background: linear-gradient(135deg, #1a3a5c 0%, #2c5f8a 50%, #1a3a5c 100%);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+.card-back::before {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border-radius: 4px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    background: repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 5px,
+        rgba(255, 255, 255, 0.03) 5px,
+        rgba(255, 255, 255, 0.03) 10px
+    );
+}
+
+.card-back::after {
+    content: '';
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.card-corner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    line-height: 1;
+}
+
+.card-corner.bottom {
+    align-self: flex-end;
+    transform: rotate(180deg);
+}
+
+.card-rank {
+    font-size: clamp(14px, 2.5vw, 18px);
+    font-weight: 700;
+}
+
+.card-suit {
+    font-size: clamp(12px, 2vw, 16px);
+}
+
+.card-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: clamp(24px, 5vw, 36px);
+}
+
+.card.red .card-rank,
+.card.red .card-suit,
+.card.red .card-center {
+    color: var(--red);
+}
+
+.card.black .card-rank,
+.card.black .card-suit,
+.card.black .card-center {
+    color: #1a1a2e;
+}
+
+.card-hidden {
+    width: var(--card-width);
+    height: var(--card-height);
+    border-radius: 8px;
+    background: linear-gradient(135deg, #1a3a5c 0%, #2c5f8a 50%, #1a3a5c 100%);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    position: relative;
+    overflow: hidden;
+    animation: dealCard 0.4s ease-out backwards;
+}
+
+.card-hidden::before {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border-radius: 4px;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    background: repeating-linear-gradient(
+        45deg,
+        transparent,
+        transparent 5px,
+        rgba(255, 255, 255, 0.03) 5px,
+        rgba(255, 255, 255, 0.03) 10px
+    );
+}
+
+.card-hidden::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+/* Result display */
+.result-display {
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+}
+
+.result-text {
+    font-size: 22px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.result-text.show {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.result-text.win {
+    color: var(--gold);
+    text-shadow: 0 0 20px rgba(240, 200, 80, 0.4);
+}
+
+.result-text.lose {
+    color: var(--red);
+    text-shadow: 0 0 20px rgba(231, 76, 60, 0.3);
+}
+
+.result-text.push {
+    color: var(--text-dim);
+}
+
+/* Action buttons */
+.actions {
+    display: flex;
+    gap: 10px;
+    padding: 14px 20px;
+}
+
+.actions.hidden,
+.betting-area.hidden {
+    display: none;
+}
+
+.btn {
+    padding: 12px 28px;
+    border: none;
+    border-radius: 10px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-family: inherit;
+}
+
+.btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+}
+
+.btn:active {
+    transform: translateY(0);
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+.btn-hit {
+    background: linear-gradient(135deg, #2ecc71, #27ae60);
+    color: white;
+}
+
+.btn-stand {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+    color: white;
+}
+
+.btn-double {
+    background: linear-gradient(135deg, #f39c12, #d68910);
+    color: white;
+}
+
+.btn-deal {
+    background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+    color: #1a1a2e;
+    padding: 14px 40px;
+    font-size: 15px;
+    margin-top: 8px;
+}
+
+/* Betting area */
+.betting-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 20px 30px;
+}
+
+.current-bet {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.bet-label {
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.bet-amount {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--white);
+}
+
+.chips {
+    display: flex;
+    gap: 10px;
+}
+
+.chip {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 3px dashed rgba(255, 255, 255, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: white;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-family: inherit;
+}
+
+.chip:hover {
+    transform: scale(1.1);
+}
+
+.chip.active {
+    border-style: solid;
+    border-color: var(--gold);
+    box-shadow: 0 0 12px rgba(240, 200, 80, 0.4);
+    transform: scale(1.1);
+}
+
+.chip-10 {
+    background: linear-gradient(135deg, #3498db, #2980b9);
+}
+
+.chip-25 {
+    background: linear-gradient(135deg, #2ecc71, #27ae60);
+}
+
+.chip-50 {
+    background: linear-gradient(135deg, #e74c3c, #c0392b);
+}
+
+.chip-100 {
+    background: linear-gradient(135deg, #1a1a2e, #2c2c4a);
+}
+
+/* Animations */
+@keyframes dealCard {
+    from {
+        opacity: 0;
+        transform: translateY(-80px) translateX(40px) rotate(5deg) scale(0.8);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) translateX(0) rotate(0) scale(1);
+    }
+}
+
+@keyframes flipCard {
+    0% {
+        transform: rotateY(180deg);
+    }
+    100% {
+        transform: rotateY(0deg);
+    }
+}
+
+/* Responsive */
+@media (max-width: 480px) {
+    .table {
+        padding: 10px;
+    }
+
+    .game-container {
+        gap: 10px;
+    }
+
+    .actions {
+        padding: 10px 14px;
+        gap: 6px;
+    }
+
+    .btn {
+        padding: 10px 18px;
+        font-size: 12px;
+    }
+
+    .betting-area {
+        padding: 14px 20px;
+    }
+
+    .chip {
+        width: 40px;
+        height: 40px;
+        font-size: 11px;
+    }
+
+    .dealer-area,
+    .player-area {
+        min-height: 120px;
+    }
+}

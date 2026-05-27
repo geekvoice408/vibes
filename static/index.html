@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blackjack</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="table">
+        <div class="game-container">
+            <!-- Balance Display -->
+            <div class="balance-bar glass">
+                <span class="balance-label">Balance</span>
+                <span class="balance-amount" id="balance">$1000</span>
+            </div>
+
+            <!-- Dealer Area -->
+            <div class="dealer-area">
+                <div class="hand-label">
+                    <span>Dealer</span>
+                    <span class="hand-total" id="dealer-total"></span>
+                </div>
+                <div class="cards" id="dealer-cards"></div>
+            </div>
+
+            <!-- Result Display -->
+            <div class="result-display" id="result-display">
+                <div class="result-text" id="result-text"></div>
+            </div>
+
+            <!-- Player Area -->
+            <div class="player-area">
+                <div class="hand-label">
+                    <span>Player</span>
+                    <span class="hand-total" id="player-total"></span>
+                </div>
+                <div class="cards" id="player-cards"></div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="actions glass" id="actions">
+                <button class="btn btn-hit" id="btn-hit" onclick="doHit()">Hit</button>
+                <button class="btn btn-stand" id="btn-stand" onclick="doStand()">Stand</button>
+                <button class="btn btn-double" id="btn-double" onclick="doDouble()">Double</button>
+            </div>
+
+            <!-- Betting Area -->
+            <div class="betting-area glass" id="betting-area">
+                <div class="current-bet">
+                    <span class="bet-label">Bet</span>
+                    <span class="bet-amount" id="bet-amount">$50</span>
+                </div>
+                <div class="chips">
+                    <button class="chip chip-10" onclick="setBet(10)">10</button>
+                    <button class="chip chip-25" onclick="setBet(25)">25</button>
+                    <button class="chip chip-50 active" onclick="setBet(50)">50</button>
+                    <button class="chip chip-100" onclick="setBet(100)">100</button>
+                </div>
+                <button class="btn btn-deal" id="btn-deal" onclick="doDeal()">Deal</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
