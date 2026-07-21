@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Redact</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <span class="logo-icon">&#9608;</span>
+                <h1>Redact</h1>
+            </div>
+            <p class="subtitle">Paste text below. IPs become <code>1.2.3.4</code> and domains become <code>example.com</code>.</p>
+        </header>
+
+        <main>
+            <div class="panel input-panel">
+                <div class="panel-header">
+                    <span class="panel-label">Input</span>
+                    <button class="btn-clear" id="btn-clear">Clear</button>
+                </div>
+                <textarea id="input" placeholder="Paste your text here...&#10;&#10;e.g. Connected to 192.168.1.50 via api.internal.corp.net on port 443"></textarea>
+            </div>
+
+            <div class="action-bar">
+                <button class="btn-redact" id="btn-redact">Redact</button>
+                <div class="stats" id="stats"></div>
+            </div>
+
+            <div class="panel output-panel">
+                <div class="panel-header">
+                    <span class="panel-label">Output</span>
+                    <button class="btn-copy" id="btn-copy">Copy</button>
+                </div>
+                <textarea id="output" readonly placeholder="Redacted text will appear here..."></textarea>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
