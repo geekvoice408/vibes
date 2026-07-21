@@ -1,5 +1,5 @@
 [package]
-name = "blackjack"
+name = "redact"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,5 +9,4 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
-uuid = { version = "1", features = ["v4"] }
-rand = "0.8"
+regex = "1"
