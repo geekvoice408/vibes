@@ -5,34 +5,19 @@ const btnRedact = document.getElementById('btn-redact');
 const btnClear = document.getElementById('btn-clear');
 const btnCopy = document.getElementById('btn-copy');
 
-btnRedact.addEventListener('click', async () => {
+btnRedact.addEventListener('click', () => {
     const text = input.value.trim();
     if (!text) return;
 
-    btnRedact.disabled = true;
-    btnRedact.textContent = 'Redacting...';
+    const data = redactText(text);
+    output.value = data.redacted;
 
-    try {
-        const res = await fetch('/api/redact', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text }),
-        });
-        const data = await res.json();
-        output.value = data.redacted;
-
-        const total = data.ip_count + data.domain_count;
-        if (total > 0) {
-            stats.innerHTML = `<span class="count">${total}</span> redaction${total !== 1 ? 's' : ''} (${data.ip_count} IP, ${data.domain_count} domain)`;
-        } else {
-            stats.textContent = 'Nothing to redact';
-        }
-    } catch (e) {
-        stats.textContent = 'Error processing text';
+    const total = data.ip_count + data.domain_count;
+    if (total > 0) {
+        stats.innerHTML = `<span class="count">${total}</span> redaction${total !== 1 ? 's' : ''} (${data.ip_count} IP, ${data.domain_count} domain)`;
+    } else {
+        stats.textContent = 'Nothing to redact';
     }
-
-    btnRedact.disabled = false;
-    btnRedact.textContent = 'Redact';
 });
 
 btnClear.addEventListener('click', () => {
