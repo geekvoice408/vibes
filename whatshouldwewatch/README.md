@@ -26,8 +26,9 @@ python3 -m http.server 8080
 
 ## Deployment
 
-Pushed to `main` → the `pages.yml` workflow publishes this directory to
-GitHub Pages.
+Pushed to `main` → the `pages.yml` workflow publishes this directory (along
+with the other static vibes apps) to GitHub Pages at
+<https://geekvoice408.github.io/vibes/whatshouldwewatch/>.
 
 ## History
 

@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "whatshouldwewatch/**"
+      - "redact/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -25,9 +26,36 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Assemble site
+        run: |
+          mkdir _site
+          cp -r whatshouldwewatch _site/
+          cp -r redact _site/
+          cat > _site/index.html <<'EOF'
+          <!DOCTYPE html>
+          <html lang="en">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>vibes</title>
+            <style>
+              body { font-family: system-ui, sans-serif; background: #0d0015; color: #fff;
+                     display: flex; flex-direction: column; align-items: center;
+                     justify-content: center; min-height: 100vh; gap: 1.5rem; margin: 0; }
+              a { color: #00f5ff; font-size: 1.4rem; text-decoration: none; }
+              a:hover { text-decoration: underline; }
+            </style>
+          </head>
+          <body>
+            <h1>vibes</h1>
+            <a href="whatshouldwewatch/">📺 What Should We Watch?</a>
+            <a href="redact/">🔒 Redact</a>
+          </body>
+          </html>
+          EOF
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: whatshouldwewatch
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
