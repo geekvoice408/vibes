@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Episode Roulette</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="apple-touch-icon-precomposed" href="apple-touch-icon-precomposed.png">
+    <link rel="manifest" href="manifest.json">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Episode Roulette">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="theme-color" content="#0d0015">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;700;800&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --pink:   #ff2d78;
+            --cyan:   #00f5ff;
+            --purple: #bf00ff;
+            --gold:   #ffd000;
+            --green:  #00ff88;
+            --orange: #ff6400;
+            --blue:   #2962ff;
+            --bg:     #0d0015;
+            --surface: rgba(13, 0, 21, 0.85);
+        }
+
+        body {
+            font-family: 'DM Sans', sans-serif;
+            background: var(--bg);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            color: #fff;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* ── Synthwave sky gradient ── */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 55%;
+            background: linear-gradient(
+                to bottom,
+                #0d0015 0%,
+                #1a003a 40%,
+                #3d0066 70%,
+                #6b006b 85%,
+                #c0006b 100%
+            );
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ── Perspective grid floor ── */
+        .grid-floor {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 55%;
+            background-image:
+                linear-gradient(to bottom, rgba(255,45,120,0.6) 1px, transparent 1px),
+                linear-gradient(to right,  rgba(255,45,120,0.4) 1px, transparent 1px);
+            background-size: 60px 60px;
+            transform: perspective(400px) rotateX(60deg);
+            transform-origin: bottom center;
+            pointer-events: none;
+            z-index: 0;
+            animation: grid-scroll 4s linear infinite;
+        }
+
+        @keyframes grid-scroll {
+            0%   { background-position: 0 0; }
+            100% { background-position: 0 60px; }
+        }
+
+        /* ── Retro sun ── */
+        .retro-sun {
+            position: fixed;
+            bottom: 47%;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 140px;
+            height: 70px;
+            border-radius: 70px 70px 0 0;
+            background: linear-gradient(to right, #ff2020 0%, #ff8c00 20%, #ffd000 40%, #00cc66 60%, #0088ff 80%, #bf00ff 100%);
+            box-shadow: 0 0 60px 20px rgba(150, 80, 255, 0.35), 0 0 120px 40px rgba(0, 120, 255, 0.2);
+            overflow: hidden;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        .retro-sun::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: repeating-linear-gradient(
+                to bottom,
+                transparent,
+                transparent 8px,
+                var(--bg) 8px,
+                var(--bg) 10px
+            );
+        }
+
+        /* ── Scanlines overlay ── */
+        .scan-lines {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: repeating-linear-gradient(
+                to bottom,
+                transparent 0px,
+                transparent 2px,
+                rgba(0, 0, 0, 0.15) 2px,
+                rgba(0, 0, 0, 0.15) 4px
+            );
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* ── Top neon strip ── */
+        .neon-strip {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(90deg, #ff2020, #ff8c00, #ffd000, #00cc66, #0088ff, #bf00ff, #ff2020);
+            background-size: 200% 100%;
+            animation: neon-slide 5s linear infinite;
+            box-shadow: 0 0 10px rgba(255,100,0,0.7), 0 0 20px rgba(0,136,255,0.5), 0 0 32px rgba(191,0,255,0.4);
+            z-index: 100;
+        }
+
+        @keyframes neon-slide {
+            0%   { background-position: 0% 50%; }
+            100% { background-position: 200% 50%; }
+        }
+
+        /* ── Main content wrapper ── */
+        .container {
+            max-width: 600px;
+            width: 100%;
+            position: relative;
+            z-index: 2;
+            padding-top: 24px;
+        }
+
+        /* ── Title ── */
+        .title-wrapper {
+            text-align: center;
+            margin-bottom: 8px;
+        }
+
+        h1 {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 900;
+            font-size: 3em;
+            text-align: center;
+            letter-spacing: 0.06em;
+            color: #fff;
+            text-shadow:
+                0 0 10px var(--cyan),
+                0 0 30px var(--cyan),
+                0 0 60px var(--cyan),
+                2px 2px 0 var(--pink),
+                4px 4px 0 var(--purple);
+            animation: flicker 6s infinite;
+        }
+
+        @keyframes flicker {
+            0%, 94%, 96%, 98%, 100% { opacity: 1; }
+            95%, 97% { opacity: 0.85; }
+        }
+
+        .subtitle {
+            text-align: center;
+            margin-bottom: 28px;
+            opacity: 0.7;
+            font-size: 0.75em;
+            letter-spacing: 0.25em;
+            text-transform: uppercase;
+            color: var(--cyan);
+            margin-top: 6px;
+        }
+
+        /* ── Neon divider ── */
+        .neon-divider {
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--pink), var(--cyan), var(--pink), transparent);
+            box-shadow: 0 0 8px var(--pink);
+            margin-bottom: 28px;
+        }
+
+        /* ── Show buttons ── */
+        .show-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+            margin-bottom: 28px;
+        }
+
+        .show-btn {
+            padding: 26px 16px;
+            font-size: 1.1em;
+            font-weight: 700;
+            border: 2px solid;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: 'Space Grotesk', sans-serif;
+            letter-spacing: 0.08em;
+            position: relative;
+            overflow: hidden;
+            background: rgba(13, 0, 21, 0.7);
+            backdrop-filter: blur(8px);
+            text-align: center;
+            line-height: 1.3;
+            text-transform: uppercase;
+        }
+
+        .show-btn .btn-emoji {
+            display: block;
+            font-size: 1.5em;
+            margin-bottom: 6px;
+        }
+
+        /* Shimmer sweep */
+        .show-btn::after {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%;
+            width: 60%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            transform: skewX(-20deg);
+            transition: left 0.5s ease;
+        }
+
+        .show-btn:hover::after { left: 150%; }
+        .show-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .show-btn:not(:disabled):active { transform: scale(0.96); }
+
+        .seinfeld-btn {
+            border-color: var(--cyan);
+            color: var(--cyan);
+            box-shadow: inset 0 0 12px rgba(0,245,255,0.05);
+        }
+        .seinfeld-btn:hover:not(:disabled) {
+            background: rgba(0,245,255,0.1);
+            box-shadow: 0 0 20px var(--cyan), 0 0 40px rgba(0,245,255,0.3), inset 0 0 12px rgba(0,245,255,0.1);
+        }
+
+        .familyguy-btn {
+            border-color: var(--pink);
+            color: var(--pink);
+            box-shadow: inset 0 0 12px rgba(255,45,120,0.05);
+        }
+        .familyguy-btn:hover:not(:disabled) {
+            background: rgba(255,45,120,0.1);
+            box-shadow: 0 0 20px var(--pink), 0 0 40px rgba(255,45,120,0.3), inset 0 0 12px rgba(255,45,120,0.1);
+        }
+
+        .simpsons-btn {
+            border-color: var(--gold);
+            color: var(--gold);
+            box-shadow: inset 0 0 12px rgba(255,208,0,0.05);
+        }
+        .simpsons-btn:hover:not(:disabled) {
+            background: rgba(255,208,0,0.08);
+            box-shadow: 0 0 20px var(--gold), 0 0 40px rgba(255,208,0,0.3), inset 0 0 12px rgba(255,208,0,0.1);
+        }
+
+        .southpark-btn {
+            border-color: var(--purple);
+            color: var(--purple);
+            box-shadow: inset 0 0 12px rgba(191,0,255,0.05);
+        }
+        .southpark-btn:hover:not(:disabled) {
+            background: rgba(191,0,255,0.1);
+            box-shadow: 0 0 20px var(--purple), 0 0 40px rgba(191,0,255,0.3), inset 0 0 12px rgba(191,0,255,0.1);
+        }
+
+        .futurama-btn {
+            border-color: var(--green);
+            color: var(--green);
+            box-shadow: inset 0 0 12px rgba(0,255,136,0.05);
+        }
+        .futurama-btn:hover:not(:disabled) {
+            background: rgba(0,255,136,0.08);
+            box-shadow: 0 0 20px var(--green), 0 0 40px rgba(0,255,136,0.3), inset 0 0 12px rgba(0,255,136,0.1);
+        }
+
+        .koth-btn {
+            border-color: var(--orange);
+            color: var(--orange);
+            box-shadow: inset 0 0 12px rgba(255,100,0,0.05);
+        }
+        .koth-btn:hover:not(:disabled) {
+            background: rgba(255,100,0,0.08);
+            box-shadow: 0 0 20px var(--orange), 0 0 40px rgba(255,100,0,0.3), inset 0 0 12px rgba(255,100,0,0.1);
+        }
+
+        .laworder-btn {
+            border-color: var(--blue);
+            color: var(--blue);
+            box-shadow: inset 0 0 12px rgba(41,98,255,0.05);
+        }
+        .laworder-btn:hover:not(:disabled) {
+            background: rgba(41,98,255,0.1);
+            box-shadow: 0 0 20px var(--blue), 0 0 40px rgba(41,98,255,0.3), inset 0 0 12px rgba(41,98,255,0.1);
+        }
+
+        /* ── Seen badge on buttons ── */
+        .btn-seen-count {
+            display: block;
+            font-size: 0.55em;
+            font-weight: 400;
+            font-family: 'DM Sans', sans-serif;
+            opacity: 0.5;
+            margin-top: 5px;
+            letter-spacing: 0.04em;
+            text-transform: none;
+            min-height: 1em;
+        }
+
+        /* ── Season filter section ── */
+        .filter-toggle-btn {
+            width: 100%;
+            padding: 10px 16px;
+            background: transparent;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 4px;
+            color: rgba(255,255,255,0.35);
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 0.75em;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            cursor: pointer;
+            margin-bottom: 10px;
+            transition: all 0.2s ease;
+        }
+        .filter-toggle-btn:hover {
+            border-color: rgba(255,255,255,0.22);
+            color: rgba(255,255,255,0.6);
+        }
+
+        .filter-panel {
+            display: none;
+            background: rgba(0,0,0,0.3);
+            border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .filter-panel.open { display: block; }
+
+        .filter-show-row {
+            margin-bottom: 18px;
+            padding-bottom: 18px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .filter-show-row:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
+
+        .filter-show-label {
+            font-size: 0.7em;
+            text-transform: uppercase;
+            letter-spacing: 0.14em;
+            opacity: 0.45;
+            margin-bottom: 10px;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .season-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+        .season-chip {
+            padding: 3px 8px;
+            border: 1px solid;
+            border-radius: 20px;
+            font-size: 0.68em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            font-family: 'Space Grotesk', sans-serif;
+            letter-spacing: 0.04em;
+            background: transparent;
+            user-select: none;
+        }
+        .season-chip:hover { opacity: 0.75; }
+        .season-chip.off {
+            border-color: rgba(255,255,255,0.15) !important;
+            color: rgba(255,255,255,0.2) !important;
+            text-decoration: line-through;
+        }
+
+        .seinfeld-chips .season-chip:not(.off)  { border-color: var(--cyan);   color: var(--cyan); }
+        .familyguy-chips .season-chip:not(.off) { border-color: var(--pink);   color: var(--pink); }
+        .simpsons-chips .season-chip:not(.off)  { border-color: var(--gold);   color: var(--gold); }
+        .southpark-chips .season-chip:not(.off) { border-color: var(--purple); color: var(--purple); }
+        .futurama-chips .season-chip:not(.off)  { border-color: var(--green);  color: var(--green); }
+        .koth-chips .season-chip:not(.off)      { border-color: var(--orange); color: var(--orange); }
+        .laworder-chips .season-chip:not(.off)  { border-color: var(--blue);   color: var(--blue); }
+
+        .filter-row-footer {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-top: 10px;
+        }
+        .filter-seen-count {
+            font-size: 0.65em;
+            opacity: 0.35;
+            letter-spacing: 0.05em;
+            font-family: 'DM Sans', sans-serif;
+        }
+        .reset-history-btn {
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.25);
+            font-family: 'DM Sans', sans-serif;
+            font-size: 0.65em;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            cursor: pointer;
+            padding: 0;
+            text-decoration: underline;
+            transition: color 0.15s ease;
+        }
+        .reset-history-btn:hover { color: rgba(255,255,255,0.6); }
+
+        /* ── Loading ── */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+            font-size: 1em;
+            color: var(--cyan);
+            letter-spacing: 0.15em;
+        }
+
+        .loading.show { display: block; }
+
+        .spinner {
+            width: 52px;
+            height: 52px;
+            margin: 0 auto 20px;
+            border: 3px solid rgba(0,245,255,0.15);
+            border-top: 3px solid var(--cyan);
+            border-right: 3px solid var(--pink);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* ── Result card ── */
+        .result-card {
+            background: var(--surface);
+            border: 2px solid;
+            border-radius: 6px;
+            padding: 28px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+            display: none;
+            animation: slideIn 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+            backdrop-filter: blur(12px);
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(24px) scale(0.98); }
+            to   { opacity: 1; transform: translateY(0)  scale(1); }
+        }
+
+        .result-card.show { display: block; }
+
+        /* Card accent line */
+        .card-accent {
+            height: 3px;
+            border-radius: 2px;
+            margin-bottom: 20px;
+        }
+
+        .seinfeld-card   { border-color: var(--cyan);   box-shadow: 0 0 30px rgba(0,245,255,0.2); }
+        .familyguy-card  { border-color: var(--pink);   box-shadow: 0 0 30px rgba(255,45,120,0.2); }
+        .simpsons-card   { border-color: var(--gold);   box-shadow: 0 0 30px rgba(255,208,0,0.2); }
+        .southpark-card  { border-color: var(--purple); box-shadow: 0 0 30px rgba(191,0,255,0.2); }
+        .futurama-card   { border-color: var(--green);  box-shadow: 0 0 30px rgba(0,255,136,0.2); }
+        .koth-card       { border-color: var(--orange); box-shadow: 0 0 30px rgba(255,100,0,0.2); }
+        .laworder-card   { border-color: var(--blue);   box-shadow: 0 0 30px rgba(41,98,255,0.2); }
+
+        .seinfeld-card   .card-accent { background: linear-gradient(90deg, transparent, var(--cyan),   transparent); box-shadow: 0 0 8px var(--cyan); }
+        .familyguy-card  .card-accent { background: linear-gradient(90deg, transparent, var(--pink),   transparent); box-shadow: 0 0 8px var(--pink); }
+        .simpsons-card   .card-accent { background: linear-gradient(90deg, transparent, var(--gold),   transparent); box-shadow: 0 0 8px var(--gold); }
+        .southpark-card  .card-accent { background: linear-gradient(90deg, transparent, var(--purple), transparent); box-shadow: 0 0 8px var(--purple); }
+        .futurama-card   .card-accent { background: linear-gradient(90deg, transparent, var(--green),  transparent); box-shadow: 0 0 8px var(--green); }
+        .koth-card       .card-accent { background: linear-gradient(90deg, transparent, var(--orange), transparent); box-shadow: 0 0 8px var(--orange); }
+        .laworder-card   .card-accent { background: linear-gradient(90deg, transparent, var(--blue),   transparent); box-shadow: 0 0 8px var(--blue); }
+
+        .show-title {
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 1.6em;
+            font-weight: 900;
+            margin-bottom: 20px;
+            text-align: center;
+            padding-bottom: 14px;
+            border-bottom: 1px solid;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .seinfeld-card   .show-title { color: var(--cyan);   border-color: rgba(0,245,255,0.3);   text-shadow: 0 0 16px var(--cyan); }
+        .familyguy-card  .show-title { color: var(--pink);   border-color: rgba(255,45,120,0.3);  text-shadow: 0 0 16px var(--pink); }
+        .simpsons-card   .show-title { color: var(--gold);   border-color: rgba(255,208,0,0.3);   text-shadow: 0 0 16px var(--gold); }
+        .southpark-card  .show-title { color: var(--purple); border-color: rgba(191,0,255,0.3);   text-shadow: 0 0 16px var(--purple); }
+        .futurama-card   .show-title { color: var(--green);  border-color: rgba(0,255,136,0.3);   text-shadow: 0 0 16px var(--green); }
+        .koth-card       .show-title { color: var(--orange); border-color: rgba(255,100,0,0.3);   text-shadow: 0 0 16px var(--orange); }
+        .laworder-card   .show-title { color: var(--blue);   border-color: rgba(41,98,255,0.3);   text-shadow: 0 0 16px var(--blue); }
+
+        .episode-info {
+            background: rgba(0, 0, 0, 0.35);
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            border-left: 3px solid;
+        }
+
+        .seinfeld-card   .episode-info { border-color: var(--cyan); }
+        .familyguy-card  .episode-info { border-color: var(--pink); }
+        .simpsons-card   .episode-info { border-color: var(--gold); }
+        .southpark-card  .episode-info { border-color: var(--purple); }
+        .futurama-card   .episode-info { border-color: var(--green); }
+        .koth-card       .episode-info { border-color: var(--orange); }
+        .laworder-card   .episode-info { border-color: var(--blue); }
+
+        .episode-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #fff;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .season-episode {
+            margin-bottom: 12px;
+            font-size: 0.8em;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            opacity: 0.65;
+        }
+
+        .seinfeld-card   .season-episode { color: var(--cyan); }
+        .familyguy-card  .season-episode { color: var(--pink); }
+        .simpsons-card   .season-episode { color: var(--gold); }
+        .southpark-card  .season-episode { color: var(--purple); }
+        .futurama-card   .season-episode { color: var(--green); }
+        .koth-card       .season-episode { color: var(--orange); }
+        .laworder-card   .season-episode { color: var(--blue); }
+
+        .description {
+            line-height: 1.75;
+            color: rgba(255,255,255,0.8);
+            margin-bottom: 15px;
+            font-size: 0.9em;
+        }
+
+        .meta-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+            gap: 14px;
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid rgba(255,255,255,0.08);
+        }
+
+        .meta-item { text-align: center; }
+
+        .meta-label {
+            font-size: 0.65em;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            opacity: 0.5;
+            margin-bottom: 4px;
+        }
+
+        .meta-value {
+            font-size: 1em;
+            font-weight: bold;
+        }
+
+        .seinfeld-card   .meta-value { color: var(--cyan); }
+        .familyguy-card  .meta-value { color: var(--pink); }
+        .simpsons-card   .meta-value { color: var(--gold); }
+        .southpark-card  .meta-value { color: var(--purple); }
+        .futurama-card   .meta-value { color: var(--green); }
+        .koth-card       .meta-value { color: var(--orange); }
+        .laworder-card   .meta-value { color: var(--blue); }
+
+        /* ── Try again button ── */
+        .try-again-btn {
+            width: 100%;
+            padding: 14px;
+            background: transparent;
+            color: rgba(255,255,255,0.6);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-family: 'Space Grotesk', sans-serif;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+        }
+
+        .try-again-btn:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.5);
+            color: #fff;
+        }
+
+        /* ── Error ── */
+        .error-message {
+            background: rgba(255,45,120,0.08);
+            border: 1px solid rgba(255,45,120,0.4);
+            color: var(--pink);
+            padding: 16px 20px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+            text-align: center;
+            font-size: 0.85em;
+            letter-spacing: 0.05em;
+        }
+
+        .error-message.show { display: block; }
+
+        /* ── Responsive ── */
+        @media (max-width: 480px) {
+            h1 { font-size: 2em; }
+            .show-buttons { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .show-btn { padding: 18px 10px; font-size: 0.9em; }
+        }
+    </style>
+</head>
+<body>
+    <div class="scan-lines"></div>
+    <div class="neon-strip"></div>
+    <div class="grid-floor"></div>
+    <div class="retro-sun"></div>
+
+    <div class="container">
+        <div class="title-wrapper">
+            <h1>WHAT SHOULD<br>WE WATCH?</h1>
+        </div>
+
+        <p class="subtitle">pick a show &mdash; get an episode</p>
+
+        <div class="neon-divider"></div>
+
+        <div class="error-message" id="errorMessage"></div>
+
+        <div class="show-buttons">
+            <button class="show-btn seinfeld-btn" onclick="getRandomEpisode('seinfeld')">
+                <span class="btn-emoji">🥨</span>
+                Seinfeld
+                <span class="btn-seen-count" id="seen-seinfeld"></span>
+            </button>
+            <button class="show-btn familyguy-btn" onclick="getRandomEpisode('familyguy')">
+                <span class="btn-emoji">🐶</span>
+                Family Guy
+                <span class="btn-seen-count" id="seen-familyguy"></span>
+            </button>
+            <button class="show-btn simpsons-btn" onclick="getRandomEpisode('simpsons')">
+                <span class="btn-emoji">🍩</span>
+                The Simpsons
+                <span class="btn-seen-count" id="seen-simpsons"></span>
+            </button>
+            <button class="show-btn southpark-btn" onclick="getRandomEpisode('southpark')">
+                <span class="btn-emoji">⛰️</span>
+                South Park
+                <span class="btn-seen-count" id="seen-southpark"></span>
+            </button>
+            <button class="show-btn futurama-btn" onclick="getRandomEpisode('futurama')">
+                <span class="btn-emoji">🚀</span>
+                Futurama
+                <span class="btn-seen-count" id="seen-futurama"></span>
+            </button>
+            <button class="show-btn koth-btn" onclick="getRandomEpisode('koth')">
+                <span class="btn-emoji">🏠</span>
+                King of the Hill
+                <span class="btn-seen-count" id="seen-koth"></span>
+            </button>
+            <button class="show-btn laworder-btn" onclick="getRandomEpisode('laworder')">
+                <span class="btn-emoji">⚖️</span>
+                Law &amp; Order
+                <span class="btn-seen-count" id="seen-laworder"></span>
+            </button>
+        </div>
+
+        <button class="filter-toggle-btn" id="filterToggleBtn" onclick="toggleFilterPanel()">⚙ Season Filters ▼</button>
+        <div class="filter-panel" id="filterPanel"></div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>SCANNING SIGNALS...</p>
+        </div>
+
+        <div id="resultCard" class="result-card">
+            <div class="card-accent"></div>
+            <div class="show-title" id="showTitle"></div>
+            <div class="episode-info">
+                <div class="episode-title" id="episodeTitle"></div>
+                <div class="season-episode" id="seasonEpisode"></div>
+                <div class="description" id="description"></div>
+                <div class="meta-info" id="metaInfo"></div>
+            </div>
+            <button class="try-again-btn" onclick="hideResult()">&#8592; Pick Another Show</button>
+        </div>
+    </div>
+
+    <script>
+        // TVMaze is keyless; one /episodes call per show returns the full
+        // catalogue (title, summary, runtime, rating, airdate) in one shot.
+        const showData = {
+            familyguy: { name: "Family Guy",       tvmazeId: 84 },
+            simpsons:  { name: "The Simpsons",     tvmazeId: 83 },
+            seinfeld:  { name: "Seinfeld",         tvmazeId: 530 },
+            southpark: { name: "South Park",       tvmazeId: 112 },
+            futurama:  { name: "Futurama",         tvmazeId: 538 },
+            koth:      { name: "King of the Hill", tvmazeId: 115 },
+            laworder:  { name: "Law & Order",      tvmazeId: 562 }
+        };
+
+        // Hardcoded defaults so the filter panel works immediately.
+        // Overridden from the TVMaze episode list on first pick.
+        const defaultSeasons = {
+            seinfeld: 9, familyguy: 22, simpsons: 36, southpark: 27,
+            futurama: 8, koth: 13, laworder: 20
+        };
+
+        // ── Episode catalogue (TVMaze) ───────────────────────────────────────
+
+        const EPISODES_TTL_MS = 24 * 60 * 60 * 1000;
+
+        function getCachedEpisodes(key) {
+            try {
+                const raw = JSON.parse(localStorage.getItem(`episodes_${key}`) || 'null');
+                if (!raw || !Array.isArray(raw.episodes)) return null;
+                return raw;
+            } catch { return null; }
+        }
+
+        async function getEpisodes(key) {
+            const cached = getCachedEpisodes(key);
+            if (cached && Date.now() - cached.fetched < EPISODES_TTL_MS) return cached.episodes;
+
+            try {
+                const res = await fetch(`https://api.tvmaze.com/shows/${showData[key].tvmazeId}/episodes`);
+                if (!res.ok) throw new Error(`TVMaze returned ${res.status}`);
+                const data = await res.json();
+                const episodes = data.map(ep => ({
+                    s: ep.season,
+                    e: ep.number,
+                    name: ep.name,
+                    summary: stripHtml(ep.summary),
+                    runtime: ep.runtime,
+                    airdate: ep.airdate,
+                    rating: ep.rating && ep.rating.average
+                }));
+                localStorage.setItem(`episodes_${key}`, JSON.stringify({ fetched: Date.now(), episodes }));
+                return episodes;
+            } catch (err) {
+                // Offline / API hiccup: fall back to a stale catalogue if we have one
+                if (cached) return cached.episodes;
+                throw err;
+            }
+        }
+
+        function stripHtml(html) {
+            if (!html) return '';
+            return new DOMParser().parseFromString(html, 'text/html').body.textContent.trim();
+        }
+
+        // ── Storage helpers ──────────────────────────────────────────────────
+
+        function seenKey(season, epNum) { return `s${season}e${epNum}`; }
+
+        function getSeenMap(key) {
+            return JSON.parse(localStorage.getItem(`seen_${key}`) || '{}');
+        }
+        function getSeen(key) { return new Set(Object.keys(getSeenMap(key))); }
+        function addSeen(key, season, epNum) {
+            const map = getSeenMap(key);
+            map[seenKey(season, epNum)] = { s: season, e: epNum };
+            localStorage.setItem(`seen_${key}`, JSON.stringify(map));
+        }
+
+        // One-time migration: watch history used to be keyed by OMDb imdbID
+        // (tt…). Re-key by season/episode so it survives the TVMaze switch.
+        function migrateSeenHistory() {
+            Object.keys(showData).forEach(key => {
+                const map = getSeenMap(key);
+                if (!Object.keys(map).some(k => k.startsWith('tt'))) return;
+                const migrated = {};
+                Object.values(map).forEach(v => {
+                    if (v && v.s && v.e) migrated[seenKey(v.s, v.e)] = { s: v.s, e: v.e };
+                });
+                localStorage.setItem(`seen_${key}`, JSON.stringify(migrated));
+            });
+        }
+        function resetSeen(key) {
+            localStorage.removeItem(`seen_${key}`);
+            updateButtonBadges();
+            renderFilterPanel();
+        }
+        function seenCountForSeason(key, season) {
+            return Object.values(getSeenMap(key)).filter(v => v.s === season).length;
+        }
+
+        function getExcluded(key) {
+            return new Set(JSON.parse(localStorage.getItem(`excluded_${key}`) || '[]'));
+        }
+        function toggleExcluded(key, season) {
+            const ex = getExcluded(key);
+            ex.has(season) ? ex.delete(season) : ex.add(season);
+            localStorage.setItem(`excluded_${key}`, JSON.stringify([...ex]));
+            renderFilterPanel();
+        }
+
+        function getTotalSeasons(key) {
+            const cached = getCachedEpisodes(key);
+            if (cached) return Math.max(...cached.episodes.map(ep => ep.s));
+            return defaultSeasons[key] || null;
+        }
+        function getCachedEpCount(key, season) {
+            const cached = getCachedEpisodes(key);
+            if (!cached) return null;
+            const n = cached.episodes.filter(ep => ep.s === season).length;
+            return n || null;
+        }
+
+        function shuffle(arr) {
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+            return arr;
+        }
+
+        // ── UI helpers ───────────────────────────────────────────────────────
+
+        function showError(msg) {
+            const el = document.getElementById('errorMessage');
+            el.innerHTML = msg;
+            el.classList.add('show');
+            setTimeout(() => el.classList.remove('show'), 8000);
+        }
+        function showLoading() {
+            document.querySelectorAll('.show-btn').forEach(b => b.disabled = true);
+            document.getElementById('loading').classList.add('show');
+            document.getElementById('resultCard').classList.remove('show');
+        }
+        function hideLoading() {
+            document.querySelectorAll('.show-btn').forEach(b => b.disabled = false);
+            document.getElementById('loading').classList.remove('show');
+        }
+
+        function updateButtonBadges() {
+            Object.keys(showData).forEach(key => {
+                const el = document.getElementById(`seen-${key}`);
+                if (!el) return;
+                const count = Object.keys(getSeenMap(key)).length;
+                el.textContent = count > 0 ? `${count} seen` : '';
+            });
+        }
+
+        function toggleFilterPanel() {
+            const panel = document.getElementById('filterPanel');
+            const btn   = document.getElementById('filterToggleBtn');
+            const open  = panel.classList.toggle('open');
+            btn.textContent = open ? '⚙ Season Filters ▲' : '⚙ Season Filters ▼';
+            if (open) renderFilterPanel();
+        }
+
+        function renderFilterPanel() {
+            const panel = document.getElementById('filterPanel');
+            if (!panel || !panel.classList.contains('open')) return;
+            panel.innerHTML = '';
+
+            Object.entries(showData).forEach(([key, show]) => {
+                const total = getTotalSeasons(key);
+                if (!total) return;
+
+                const excluded  = getExcluded(key);
+                const totalSeen = Object.keys(getSeenMap(key)).length;
+
+                const row = document.createElement('div');
+                row.className = 'filter-show-row';
+
+                const label = document.createElement('div');
+                label.className = 'filter-show-label';
+                label.textContent = show.name;
+                row.appendChild(label);
+
+                const chips = document.createElement('div');
+                chips.className = `season-chips ${key}-chips`;
+                for (let s = 1; s <= total; s++) {
+                    const chip = document.createElement('button');
+                    chip.className = 'season-chip' + (excluded.has(s) ? ' off' : '');
+                    chip.textContent = `S${s}`;
+                    const seen       = seenCountForSeason(key, s);
+                    const cachedTotal = getCachedEpCount(key, s);
+                    if (seen > 0) chip.title = cachedTotal ? `${seen}/${cachedTotal} watched` : `${seen} watched`;
+                    chip.onclick = () => toggleExcluded(key, s);
+                    chips.appendChild(chip);
+                }
+                row.appendChild(chips);
+
+                if (totalSeen > 0) {
+                    const footer = document.createElement('div');
+                    footer.className = 'filter-row-footer';
+
+                    const countEl = document.createElement('span');
+                    countEl.className = 'filter-seen-count';
+                    countEl.textContent = `${totalSeen} episode${totalSeen !== 1 ? 's' : ''} watched`;
+                    footer.appendChild(countEl);
+
+                    const resetBtn = document.createElement('button');
+                    resetBtn.className = 'reset-history-btn';
+                    resetBtn.textContent = 'Clear history';
+                    resetBtn.onclick = () => {
+                        if (confirm(`Clear watched history for ${show.name}?`)) resetSeen(key);
+                    };
+                    footer.appendChild(resetBtn);
+                    row.appendChild(footer);
+                }
+
+                panel.appendChild(row);
+            });
+        }
+
+        // ── Episode picker ───────────────────────────────────────────────────
+
+        async function getRandomEpisode(showKey) {
+            showLoading();
+
+            try {
+                const episodes = await getEpisodes(showKey);
+                const seen     = getSeen(showKey);
+                const excluded = getExcluded(showKey);
+
+                const candidates = episodes.filter(ep =>
+                    !excluded.has(ep.s) && !seen.has(seenKey(ep.s, ep.e))
+                );
+
+                if (candidates.length === 0) {
+                    hideLoading();
+                    const allExcluded = episodes.every(ep => excluded.has(ep.s));
+                    if (allExcluded) showError('All seasons excluded — re-enable some in ⚙ Season Filters.');
+                    else displayAllSeen(showKey);
+                    return;
+                }
+
+                const ep = candidates[Math.floor(Math.random() * candidates.length)];
+
+                addSeen(showKey, ep.s, ep.e);
+                updateButtonBadges();
+                renderFilterPanel();
+
+                displayEpisode(showKey, ep);
+                hideLoading();
+
+            } catch (error) {
+                hideLoading();
+                showError(`ERROR: ${error.message}`);
+            }
+        }
+
+        function displayEpisode(showKey, ep) {
+            const resultCard = document.getElementById('resultCard');
+            resultCard.className = `result-card show ${showKey}-card`;
+
+            document.getElementById('showTitle').textContent     = showData[showKey].name;
+            document.getElementById('episodeTitle').textContent  = ep.name;
+            document.getElementById('seasonEpisode').textContent = `S${String(ep.s).padStart(2,'0')} E${String(ep.e).padStart(2,'0')}`;
+            document.getElementById('description').textContent   = ep.summary || 'No description available.';
+
+            let metaHtml = '';
+            if (ep.airdate)
+                metaHtml += `<div class="meta-item"><div class="meta-label">Released</div><div class="meta-value">${ep.airdate}</div></div>`;
+            if (ep.rating)
+                metaHtml += `<div class="meta-item"><div class="meta-label">Rating</div><div class="meta-value">&#9733; ${ep.rating}</div></div>`;
+            if (ep.runtime)
+                metaHtml += `<div class="meta-item"><div class="meta-label">Runtime</div><div class="meta-value">${ep.runtime} min</div></div>`;
+
+            document.getElementById('metaInfo').innerHTML = metaHtml;
+            resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function displayAllSeen(showKey) {
+            const resultCard = document.getElementById('resultCard');
+            resultCard.className = `result-card show ${showKey}-card`;
+            document.getElementById('showTitle').textContent     = showData[showKey].name;
+            document.getElementById('episodeTitle').textContent  = "You've seen them all!";
+            document.getElementById('seasonEpisode').textContent = '';
+            document.getElementById('description').textContent   =
+                `Every available episode has been marked as watched. Reset your history to start fresh.`;
+            document.getElementById('metaInfo').innerHTML =
+                `<div style="width:100%;text-align:center">
+                    <button class="try-again-btn" style="border-color:rgba(255,255,255,0.3)"
+                        onclick="resetSeen('${showKey}'); hideResult();">
+                        ↺ Reset ${showData[showKey].name} History
+                    </button>
+                </div>`;
+            resultCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        function hideResult() {
+            document.getElementById('resultCard').classList.remove('show');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // ── Init ─────────────────────────────────────────────────────────────
+        migrateSeenHistory();
+        updateButtonBadges();
+    </script>
+</body>
+</html>
