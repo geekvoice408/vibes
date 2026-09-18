@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0b1d6b"/>
+      <stop offset="40%" stop-color="#1657d6"/>
+      <stop offset="70%" stop-color="#6a3fd8"/>
+      <stop offset="100%" stop-color="#e847c9"/>
+    </linearGradient>
+    <linearGradient id="sun" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#d8f7ff"/>
+      <stop offset="100%" stop-color="#3aa6ff"/>
+    </linearGradient>
+    <clipPath id="roundedClip">
+      <rect x="24" y="24" width="976" height="976" rx="200"/>
+    </clipPath>
+  </defs>
+
+  <rect x="24" y="24" width="976" height="976" rx="200" fill="#1a0a2e"/>
+  <rect x="24" y="24" width="976" height="976" rx="200" fill="url(#bg)"/>
+
+  <g clip-path="url(#roundedClip)">
+    <!-- retro sun -->
+    <circle cx="512" cy="470" r="190" fill="url(#sun)" opacity="0.9"/>
+    <!-- horizon grid, synthwave style -->
+    <g stroke="#39d9ff" stroke-width="6" opacity="0.85">
+      <line x1="24" y1="660" x2="1000" y2="660"/>
+      <line x1="24" y1="720" x2="1000" y2="720"/>
+      <line x1="24" y1="800" x2="1000" y2="800"/>
+      <line x1="24" y1="900" x2="1000" y2="900"/>
+    </g>
+    <g stroke="#39d9ff" stroke-width="6" opacity="0.85">
+      <line x1="512" y1="660" x2="60" y2="1000"/>
+      <line x1="512" y1="660" x2="260" y2="1000"/>
+      <line x1="512" y1="660" x2="512" y2="1000"/>
+      <line x1="512" y1="660" x2="764" y2="1000"/>
+      <line x1="512" y1="660" x2="964" y2="1000"/>
+    </g>
+    <rect x="24" y="24" width="976" height="636" fill="transparent"/>
+  </g>
+
+  <!-- hard-edge sticker shadow for the gear -->
+  <g transform="translate(28,32)">
+    <path d="M512 208 L560 208 L578 288 L628 306 L692 258 L734 300 L686 364 L704 414 L784 432 L784 480 L704 498 L686 548 L734 612 L692 654 L628 606 L578 624 L560 704 L512 704 L464 624 L414 606 L350 654 L308 612 L356 548 L338 498 L258 480 L258 432 L338 414 L356 364 L308 300 L350 258 L414 306 L464 288 Z" fill="#0b0616"/>
+  </g>
+
+  <!-- gear body -->
+  <path d="M512 208 L560 208 L578 288 L628 306 L692 258 L734 300 L686 364 L704 414 L784 432 L784 480 L704 498 L686 548 L734 612 L692 654 L628 606 L578 624 L560 704 L512 704 L464 624 L414 606 L350 654 L308 612 L356 548 L338 498 L258 480 L258 432 L338 414 L356 364 L308 300 L350 258 L414 306 L464 288 Z"
+        fill="#fdf6ff" stroke="#1a0a2e" stroke-width="18" stroke-linejoin="round"/>
+
+  <!-- gear ring center -->
+  <circle cx="521" cy="456" r="118" fill="#fdf6ff" stroke="#1a0a2e" stroke-width="18"/>
+  <circle cx="521" cy="456" r="66" fill="url(#bg)" stroke="#1a0a2e" stroke-width="16"/>
+
+  <!-- chrome highlight streak -->
+  <path d="M120 90 L340 90 L160 330 L60 330 Z" fill="#ffffff" opacity="0.18"/>
+
+  <!-- sparkles, 90s sticker style -->
+  <g fill="#fff6a8">
+    <path d="M148 176 l14 34 34 14 -34 14 -14 34 -14 -34 -34 -14 34 -14 Z"/>
+    <path d="M860 780 l10 24 24 10 -24 10 -10 24 -10 -24 -24 -10 24 -10 Z"/>
+  </g>
+
+  <rect x="24" y="24" width="976" height="976" rx="200" fill="none" stroke="#1a0a2e" stroke-width="10"/>
+</svg>

@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+*.xcodeproj
+/dist/
+AppIconSource/render/
+AppIconSource/AppIcon.iconset/
