@@ -46,6 +46,8 @@ struct ContentView: View {
                         TerminalHostView(
                             executable: terminalTab.executable,
                             args: terminalTab.args,
+                            fontFamily: model.appConfig.terminalFontFamily,
+                            fontSize: CGFloat(model.appConfig.terminalFontSize),
                             onExit: { _ in model.closeTerminalTab(terminalTab.id) }
                         )
                         .opacity(isSelected ? 1 : 0)
@@ -74,6 +76,17 @@ struct ContentView: View {
             set: { if !$0 { model.cancelLogin() } }
         )) {
             LoginSheetView(model: model)
+        }
+        .sheet(isPresented: Binding(
+            get: { model.showSettings },
+            set: { model.showSettings = $0 }
+        )) {
+            SettingsView(model: model)
+        }
+        .background {
+            Button("") { model.showSettings = true }
+                .keyboardShortcut(",", modifiers: .command)
+                .opacity(0)
         }
     }
 }

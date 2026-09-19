@@ -10,15 +10,23 @@ struct ResourceCardView: View {
 
     private var isPinned: Bool { model.pinnedResourceIDs.contains(row.id) }
     private var isHovered: Bool { model.hoveredResourceID == row.id }
+    private var customIconPath: String? { model.customIcons[row.name.lowercased()] }
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.space[3]) {
             ResourceIconImage(
                 name: row.iconName,
+                customFilePath: customIconPath,
                 fallbackSymbol: ResourceIconStyle.symbol(for: row.kind),
                 fallbackTint: ResourceIconStyle.tint(for: row.kind)
             )
             .frame(width: 45, height: 45)
+            .contextMenu {
+                Button("Set Custom Icon…") { model.pickCustomIcon(forResourceName: row.name) }
+                if customIconPath != nil {
+                    Button("Remove Custom Icon") { model.removeCustomIcon(forResourceName: row.name) }
+                }
+            }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: Theme.space[1]) {
@@ -53,17 +61,26 @@ struct ResourceCardView: View {
         }
         .padding(Theme.space[3])
         .padding(.leading, Theme.space[3])
+        .padding(.trailing, row.hasHealthWarning ? Theme.space[5] : Theme.space[3])
         .frame(height: 110, alignment: .top)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(cardBackground)
         .overlay(
             RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isHovered ? Color.clear : Theme.spotBackground0, lineWidth: 2)
+                .strokeBorder(
+                    row.hasHealthWarning ? Theme.interactiveAlert : (isHovered ? Color.clear : Theme.spotBackground0),
+                    lineWidth: row.hasHealthWarning ? 2 : 2
+                )
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .shadow(color: isHovered ? .black.opacity(0.25) : .clear, radius: 6, y: 2)
         .overlay(alignment: .topLeading) {
             pinButton
+        }
+        .overlay(alignment: .trailing) {
+            if row.hasHealthWarning {
+                healthWarningBadge
+            }
         }
         .onHover { model.hoveredResourceID = $0 ? row.id : nil }
     }
@@ -76,6 +93,32 @@ struct ResourceCardView: View {
             Theme.levelSurface
         } else {
             Color.clear
+        }
+    }
+
+    /// Approximates CardsView/WarningRightEdgeBadgeSvg.tsx — a warning wedge on the card's
+    /// right edge; clicking it shows the health message/error (StatusInfo.tsx's detail panel,
+    /// simplified to a popover here instead of a full sliding side panel).
+    private var healthWarningBadge: some View {
+        Button {
+            model.showingHealthInfoForResourceID = row.id
+        } label: {
+            ZStack {
+                Rectangle().fill(Theme.interactiveAlert).frame(width: 28)
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white)
+            }
+        }
+        .buttonStyle(.plain)
+        .frame(width: 28)
+        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 0, bottomTrailingRadius: 8, topTrailingRadius: 8))
+        .help("Show Connection Issue")
+        .popover(isPresented: Binding(
+            get: { model.showingHealthInfoForResourceID == row.id },
+            set: { if !$0 { model.showingHealthInfoForResourceID = nil } }
+        )) {
+            HealthWarningDetailView(row: row)
         }
     }
 
@@ -112,6 +155,32 @@ struct ResourceCardView: View {
                     .foregroundStyle(Theme.textSlightlyMuted)
             }
         }
+    }
+}
+
+/// Simplified stand-in for StatusInfo.tsx's UnhealthyStatusInfo panel — that's a full sliding
+/// side panel with a troubleshooting-guide link and a per-backend-server breakdown; this is a
+/// popover with just the status/message/error tshd itself reported.
+struct HealthWarningDetailView: View {
+    let row: ResourceRow
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.space[2]) {
+            HStack(spacing: Theme.space[1]) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.interactiveAlert)
+                Text(row.kind == .database ? "Database Connection Issue" : "Kubernetes Cluster Issue")
+                    .font(Theme.uiFontMedium)
+            }
+            Text("Status: \(row.healthStatus)").font(.system(size: 12)).foregroundStyle(Theme.textMain)
+            if !row.healthMessage.isEmpty {
+                Text(row.healthMessage).font(.system(size: 12)).foregroundStyle(Theme.textSlightlyMuted)
+            }
+            if !row.healthError.isEmpty {
+                Text(row.healthError).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.textMuted)
+            }
+        }
+        .padding(Theme.space[3])
+        .frame(width: 300)
     }
 }
 

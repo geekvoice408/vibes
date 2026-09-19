@@ -41,4 +41,8 @@ let customResourceIconSpecs: [String: (dark: String, light: String)] = [
     // Servers whose "board_info" label names the hardware get this instead of the generic
     // server icon — see AppModel.row(from:)'s .server case.
     "raspberrypi": (dark: "raspberry-pi.svg", light: "raspberry-pi.svg"),
+
+    // Original icon (no real brand to match) for this specific personal server: beach/media
+    // server/production themed per request.
+    "ventura": (dark: "ventura.svg", light: "ventura.svg"),
 ]

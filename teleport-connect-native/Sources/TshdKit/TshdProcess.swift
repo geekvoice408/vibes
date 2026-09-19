@@ -36,12 +36,23 @@ public actor TshdProcess {
         self.socketPath = dir.appendingPathComponent("tshd.sock").path
         self.supportDir = dir
 
-        for sub in ["certs", "kubeconfigs", "agents"] {
+        for sub in ["certs", "kubeconfigs", "agents", "fakebin"] {
             try? FileManager.default.createDirectory(
                 at: dir.appendingPathComponent(sub, isDirectory: true),
                 withIntermediateDirectories: true
             )
         }
+
+        // tshd's SSO login flow shells out to the literal `open` command to launch the system
+        // browser (lib/client/sso/redirector.go's OpenURLInBrowser, via exec.LookPath("open") on
+        // Darwin) with no flag or env var to suppress it. Since we control the PATH of the tshd
+        // subprocess we spawn, shadow `open` with a no-op script placed earlier in PATH — this
+        // silently no-ops the browser launch without touching tsh's source. tshd still always
+        // prints the clickable SSO URL to its own stderr regardless (same function, a few lines
+        // later), which awaitSSOLoginURL(timeout:) below scans for so we can open it ourselves.
+        let fakeOpen = dir.appendingPathComponent("fakebin/open")
+        try? "#!/bin/sh\nexit 0\n".write(to: fakeOpen, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeOpen.path)
     }
 
     /// Locates the `tsh` binary, preferring common install locations before falling back to PATH.
@@ -102,21 +113,35 @@ public actor TshdProcess {
     /// Starts `tsh daemon start --addr=unix://<socketPath>` and waits until it reports readiness
     /// (tshd prints `{CONNECT_GRPC_PORT: ...}` to stdout once its listener is bound — see
     /// lib/teleterm/apiserver/apiserver.go's sendBoundNetworkPortToStdout).
-    public func start(timeout: Duration = .seconds(15)) async throws {
+    public func start(
+        timeout: Duration = .seconds(15),
+        addKeysToAgent: String = "auto",
+        hardwareKeyAgentEnabled: Bool = false
+    ) async throws {
         guard let binary = Self.locateBinary() else {
             throw TshdProcessError.binaryNotFound
         }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = [
+        var arguments = [
             "daemon", "start",
             "--addr=unix://\(socketPath)",
             "--certs-dir=\(supportDir.appendingPathComponent("certs").path)",
             "--kubeconfigs-dir=\(supportDir.appendingPathComponent("kubeconfigs").path)",
             "--agents-dir=\(supportDir.appendingPathComponent("agents").path)",
             "--installation-id=\(UUID().uuidString)",
+            "--add-keys-to-agent=\(addKeysToAgent)",
         ]
+        if hardwareKeyAgentEnabled {
+            arguments.append("--hardware-key-agent")
+        }
+        process.arguments = arguments
+
+        var environment = ProcessInfo.processInfo.environment
+        let fakeBinDir = supportDir.appendingPathComponent("fakebin").path
+        environment["PATH"] = fakeBinDir + ":" + (environment["PATH"] ?? "/usr/bin:/bin")
+        process.environment = environment
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -162,8 +187,46 @@ public actor TshdProcess {
         }
     }
 
+    private var ssoURLContinuation: CheckedContinuation<URL?, Never>?
+
     private func appendOutput(_ text: String) {
         outputBuffer += text
+        if ssoURLContinuation != nil, let url = Self.extractSSOLoginURL(from: text) {
+            resolveSSOURLWaiter(url)
+        }
+    }
+
+    /// Waits for tshd to print the clickable SSO login URL (lib/client/sso/redirector.go's
+    /// processLoginURL — printed to stderr unconditionally, whether or not a browser actually
+    /// opened) during an in-flight Login RPC. Call this concurrently with the Login call.
+    public func awaitSSOLoginURL(timeout: Duration = .seconds(20)) async -> URL? {
+        if let url = Self.extractSSOLoginURL(from: outputBuffer) {
+            return url
+        }
+        return await withCheckedContinuation { continuation in
+            self.ssoURLContinuation = continuation
+            Task {
+                try? await Task.sleep(for: timeout)
+                await self.resolveSSOURLWaiterIfPending(nil)
+            }
+        }
+    }
+
+    private func resolveSSOURLWaiter(_ url: URL?) {
+        guard let continuation = ssoURLContinuation else { return }
+        ssoURLContinuation = nil
+        continuation.resume(returning: url)
+    }
+
+    private func resolveSSOURLWaiterIfPending(_ url: URL?) {
+        resolveSSOURLWaiter(url)
+    }
+
+    private static func extractSSOLoginURL(from text: String) -> URL? {
+        guard let range = text.range(of: #"http://127\.0\.0\.1:\d+/[\w-]+"#, options: .regularExpression) else {
+            return nil
+        }
+        return URL(string: String(text[range]))
     }
 
     public func collectedOutput() -> String {

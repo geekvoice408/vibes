@@ -74,15 +74,23 @@ private struct ResourceListRowView: View {
     let row: ResourceRow
 
     private var isHovered: Bool { model.hoveredResourceID == row.id }
+    private var customIconPath: String? { model.customIcons[row.name.lowercased()] }
 
     var body: some View {
         HStack(spacing: Theme.space[2]) {
             ResourceIconImage(
                 name: row.iconName,
+                customFilePath: customIconPath,
                 fallbackSymbol: ResourceIconStyle.symbol(for: row.kind),
                 fallbackTint: ResourceIconStyle.tint(for: row.kind)
             )
             .frame(width: 20, height: 20)
+            .contextMenu {
+                Button("Set Custom Icon…") { model.pickCustomIcon(forResourceName: row.name) }
+                if customIconPath != nil {
+                    Button("Remove Custom Icon") { model.removeCustomIcon(forResourceName: row.name) }
+                }
+            }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name)
@@ -93,6 +101,10 @@ private struct ResourceListRowView: View {
                     .foregroundStyle(Theme.textMuted)
             }
 
+            if row.hasHealthWarning {
+                healthWarningIcon
+            }
+
             Spacer()
 
             ResourceActionButton(model: model, row: row)
@@ -101,5 +113,26 @@ private struct ResourceListRowView: View {
         .padding(.vertical, Theme.space[2])
         .background(isHovered ? Theme.spotBackground0 : Color.clear)
         .onHover { model.hoveredResourceID = $0 ? row.id : nil }
+    }
+
+    /// List-row equivalent of ResourceCardView's right-edge badge — same StatusInfo.tsx
+    /// warning affordance, just inline next to the name instead of a card-edge wedge since
+    /// the row has no spare edge to clip a wedge into.
+    private var healthWarningIcon: some View {
+        Button {
+            model.showingHealthInfoForResourceID = row.id
+        } label: {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.interactiveAlert)
+        }
+        .buttonStyle(.plain)
+        .help("Show Connection Issue")
+        .popover(isPresented: Binding(
+            get: { model.showingHealthInfoForResourceID == row.id },
+            set: { if !$0 { model.showingHealthInfoForResourceID = nil } }
+        )) {
+            HealthWarningDetailView(row: row)
+        }
     }
 }

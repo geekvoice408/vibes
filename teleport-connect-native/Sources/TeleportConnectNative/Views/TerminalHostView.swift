@@ -9,13 +9,29 @@ import AppKit
 struct TerminalHostView: NSViewRepresentable {
     let executable: String
     let args: [String]
+    /// CSS-style comma-separated font-family list, matching Connect's terminal.fontFamily
+    /// config key — e.g. "Menlo, Monaco, monospace". First name that actually resolves wins.
+    var fontFamily: String = "Menlo, Monaco, monospace"
+    var fontSize: CGFloat = 15
     let onExit: (Int32?) -> Void
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
         let view = LocalProcessTerminalView(frame: .zero)
+        view.font = Self.resolveFont(family: fontFamily, size: fontSize)
         view.processDelegate = context.coordinator
         view.startProcess(executable: executable, args: args)
         return view
+    }
+
+    private static func resolveFont(family: String, size: CGFloat) -> NSFont {
+        for name in family.split(separator: ",") {
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            if trimmed.lowercased() == "monospace" { continue }
+            if let font = NSFont(name: trimmed, size: size) {
+                return font
+            }
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {}

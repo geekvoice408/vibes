@@ -9,15 +9,20 @@ Teleport Connect's Electron app is a thin UI layer over `tshd`, a Go daemon that
 ## What it does
 
 - Spawns `tsh daemon start` and connects over a Unix domain socket with `grpc-swift` — no TLS needed, same as Electron does on macOS.
-- Lists your `tsh` profiles/clusters and lets you switch between them, log in (SSO, local, or passwordless/WebAuthn), and log out.
-- Browses cluster resources (servers, databases, Kubernetes clusters, apps, Windows desktops) as a grid or list, with type filtering, search-as-you-sort, and pinning.
+- Lists your `tsh` profiles/clusters and lets you switch between them, log in, and log out.
+  - SSO providers open an **in-app WebView** for the sign-in flow (instead of handing off to the system browser), with an "Open in Browser" escape hatch for providers that need real WebAuthn/passkey entitlements or Web Bluetooth (neither of which an embedded/ad-hoc-signed WKWebView can do).
+  - Local (username/password) and passwordless/WebAuthn login both work natively.
+- Browses cluster resources (servers, databases, Kubernetes clusters, apps, Windows desktops) as a grid or list, with type filtering, search-as-you-sort, pinning, and a resource count in the status bar.
+  - **Health status filtering** for databases/Kubernetes clusters: filter by healthy/unhealthy/unknown, and unhealthy resources get a warning badge with a popover showing the status/message/error tshd reported.
 - Opens a **real embedded terminal** for SSH sessions and local shells — [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) allocates an actual PTY and runs `tsh ssh ...` attached to it, the same approach Electron's `node-pty` takes.
-- Resolves real per-resource/app icons: ported the actual `guessAppIcon` matching heuristic from Teleport's own web UI, plus ~400 bundled brand SVGs from Teleport's design system, extended with icons for self-hosted homelab apps (Sonarr, Radarr, Home Assistant, etc., from [selfhst/icons](https://github.com/selfhst/icons)).
+- Resolves real per-resource/app icons: ported the actual `guessAppIcon` matching heuristic from Teleport's own web UI, plus ~400 bundled brand SVGs from Teleport's design system, extended with icons for self-hosted homelab apps (Sonarr, Radarr, Home Assistant, etc., from [selfhst/icons](https://github.com/selfhst/icons)) — and a **custom icon picker** (right-click any resource) for anything not already covered.
+- Native macOS look: system window/control colors instead of a hardcoded palette, with a light/dark/system theme toggle in the top bar.
+- A Preferences window (⌘,) covering `app_config.json` settings (theme, terminal font, SSH agent behavior, etc. — same schema/keys as Electron Connect's config file) plus a system-browser choice (Safari/Chrome) for SSO handoff.
 - Ships as a real, launchable `.app` with its own icon — see [Packaging](#packaging).
 
 ## What it doesn't do (yet)
 
-Access requests, VNet, Connect My Computer, file transfer, and resource health status are visible in the UI (toolbar filters, top-bar icon) but not wired up — they show an explanatory popover instead of silently doing nothing. DB/Kube/App gateway proxying (as opposed to browsing) isn't implemented.
+Access requests, VNet, Connect My Computer, and file transfer are visible in the UI (toolbar filters, top-bar icon) but not wired up — they show an explanatory popover instead of silently doing nothing. DB/Kube/App gateway proxying (as opposed to browsing) isn't implemented.
 
 ## Why this was even feasible
 
@@ -58,9 +63,12 @@ Sources/
   TshdKit/      TshdProcess (spawns/monitors tshd) + TshdClient (gRPC calls, incl. streaming passwordless login)
   TeleportConnectNative/
     AppModel.swift          central @Observable state — clusters, resources, tabs, login flow
+    AppConfig.swift          app_config.json schema (mirrors Electron's appConfigSchema.ts)
+    CustomIconStore.swift     persists user-uploaded custom resource icons
     GuessAppIcon.swift       ported icon-matching heuristic from shared/components/UnifiedResources
     ResourceIconSpecs*.swift generated + hand-maintained icon name -> SVG/PNG filename tables
-    Views/                   TopBar, TabStrip, ResourceList/Card/List, LoginSheet, TerminalHost, StatusBar
+    Views/                   TopBar, TabStrip, ResourceList/Card/List, LoginSheet, SSOBrowser,
+                              Settings, TerminalHost, StatusBar
     Resources/ResourceIcons/  ~400 bundled brand SVGs
 ```
 

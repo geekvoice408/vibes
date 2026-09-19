@@ -17,6 +17,11 @@ struct ResourceToolbarView: View {
                             } else {
                                 model.selectedKindFilters.insert(kind)
                             }
+                            // Mirrors onKindsChanged() in FilterPanel.tsx: clear the health
+                            // filter if the new type selection no longer supports it.
+                            if !model.isHealthStatusFilterSupported {
+                                model.selectedHealthStatuses = []
+                            }
                         } label: {
                             Label(kind.filterLabel, systemImage: model.selectedKindFilters.contains(kind) ? "checkmark" : "")
                         }
@@ -43,18 +48,29 @@ struct ResourceToolbarView: View {
                     notImplementedNote("Filtering by access-requestable resources isn't implemented in the native app yet.")
                 }
 
-                Button {
-                    model.showHealthStatusFilterInfo.toggle()
+                Menu {
+                    ForEach(["healthy", "unhealthy", "unknown"], id: \.self) { status in
+                        Button {
+                            if model.selectedHealthStatuses.contains(status) {
+                                model.selectedHealthStatuses.remove(status)
+                            } else {
+                                model.selectedHealthStatuses.insert(status)
+                            }
+                        } label: {
+                            Label(status.capitalized, systemImage: model.selectedHealthStatuses.contains(status) ? "checkmark" : "")
+                        }
+                    }
                 } label: {
-                    toolbarChip("Health Status", chevron: true).opacity(0.6)
+                    toolbarChip(
+                        "Health Status",
+                        badge: model.selectedHealthStatuses.isEmpty ? nil : "\(model.selectedHealthStatuses.count)"
+                    )
+                    .opacity(model.isHealthStatusFilterSupported ? 1 : 0.4)
                 }
-                .buttonStyle(.plain)
-                .popover(isPresented: Binding(
-                    get: { model.showHealthStatusFilterInfo },
-                    set: { model.showHealthStatusFilterInfo = $0 }
-                )) {
-                    notImplementedNote("Resource health filtering isn't implemented in the native app yet.")
-                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(!model.isHealthStatusFilterSupported)
+                .help("Health status filtering is only available for databases and Kubernetes clusters.")
             }
 
             Spacer()

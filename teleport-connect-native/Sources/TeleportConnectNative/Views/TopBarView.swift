@@ -100,6 +100,10 @@ struct TopBarView: View {
                     Button("Check for Updates…") {
                         model.checkForUpdates()
                     }
+                    Divider()
+                    Button("Preferences…") {
+                        model.showSettings = true
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .foregroundStyle(Theme.textSlightlyMuted)

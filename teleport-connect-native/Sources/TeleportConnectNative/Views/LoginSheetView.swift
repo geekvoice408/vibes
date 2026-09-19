@@ -72,12 +72,37 @@ struct LoginSheetView: View {
                 passwordlessView
 
             case .waitingForBrowser:
-                centered {
-                    ProgressView()
-                    Text("Complete the sign-in steps in your browser…")
-                        .font(Theme.uiFontSmall)
-                        .foregroundStyle(Theme.textMuted)
-                    Button("Cancel") { model.cancelLogin() }
+                if let url = model.ssoBrowserURL {
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text((model.ssoBrowserCurrentURL ?? url).host ?? "Sign in")
+                                .font(.system(size: 12)).foregroundStyle(Theme.textMuted)
+                            Spacer()
+                            Button("Open in Browser") { model.openSSOInSystemBrowser() }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Theme.brand)
+                                .help("If this provider needs something the in-app window can't do (passkeys, phone/Bluetooth pairing), finish signing in in your real browser instead.")
+                            Button("Cancel") { model.cancelLogin() }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(Theme.textMuted)
+                        }
+                        .padding(Theme.space[2])
+                        Divider()
+                        SSOBrowserView(
+                            url: url,
+                            onError: { model.statusMessage = $0 },
+                            onNavigate: { model.ssoBrowserCurrentURL = $0 }
+                        )
+                        .frame(minWidth: 640, minHeight: 520)
+                    }
+                } else {
+                    centered {
+                        ProgressView()
+                        Text("Opening sign-in window…")
+                            .font(Theme.uiFontSmall)
+                            .foregroundStyle(Theme.textMuted)
+                        Button("Cancel") { model.cancelLogin() }
+                    }
                 }
 
             case .syncing:
@@ -98,9 +123,16 @@ struct LoginSheetView: View {
                 }
             }
         }
-        .padding(Theme.space[4])
-        .frame(width: 420)
+        .padding(isShowingBrowser ? 0 : Theme.space[4])
+        .frame(width: isShowingBrowser ? nil : 420)
         .background(Theme.levelElevated)
+    }
+
+    private var isShowingBrowser: Bool {
+        if case .waitingForBrowser = model.loginState, model.ssoBrowserURL != nil {
+            return true
+        }
+        return false
     }
 
     @ViewBuilder

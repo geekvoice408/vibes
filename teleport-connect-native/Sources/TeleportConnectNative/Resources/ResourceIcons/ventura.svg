@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="sky" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffd873"/>
+      <stop offset="45%" stop-color="#ff9d5c"/>
+      <stop offset="100%" stop-color="#ff7a7a"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1fa6c9"/>
+      <stop offset="100%" stop-color="#0d6e94"/>
+    </linearGradient>
+    <clipPath id="roundedClip">
+      <rect x="16" y="16" width="480" height="480" rx="96"/>
+    </clipPath>
+  </defs>
+
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="#0d6e94"/>
+
+  <g clip-path="url(#roundedClip)">
+    <rect x="0" y="0" width="512" height="300" fill="url(#sky)"/>
+    <circle cx="180" cy="220" r="58" fill="#fff3c4"/>
+
+    <rect x="0" y="280" width="512" height="232" fill="url(#sea)"/>
+    <path d="M0 288 Q 64 268 128 288 T 256 288 T 384 288 T 512 288 V320 H0 Z" fill="#5cc9e8" opacity="0.7"/>
+    <path d="M0 312 Q 64 296 128 312 T 256 312 T 384 312 T 512 312 V340 H0 Z" fill="#8fdcf0" opacity="0.6"/>
+
+    <rect x="0" y="392" width="512" height="120" fill="#f2d38a"/>
+    <path d="M0 388 Q 96 368 192 390 T 384 388 T 512 392 V420 H0 Z" fill="#e9c274"/>
+
+    <!-- palm tree -->
+    <g transform="translate(70,300)">
+      <path d="M8 0 C -2 40 4 90 -6 200" stroke="#5a3320" stroke-width="12" fill="none" stroke-linecap="round"/>
+      <g fill="#1f7a3d">
+        <path d="M8 4 C -30 -18 -70 -10 -92 10 C -60 8 -28 16 8 20 Z"/>
+        <path d="M8 4 C 30 -22 74 -18 96 0 C 62 2 30 14 8 20 Z"/>
+        <path d="M8 0 C -16 -34 -46 -50 -70 -52 C -42 -34 -16 -18 8 14 Z"/>
+        <path d="M8 0 C 20 -38 48 -58 74 -62 C 44 -40 22 -20 8 14 Z"/>
+        <path d="M8 -4 C 2 -44 8 -72 8 -86 C 16 -60 16 -30 8 14 Z"/>
+      </g>
+    </g>
+
+    <!-- media-server unit on the sand -->
+    <g transform="translate(268,352)">
+      <rect x="0" y="0" width="170" height="110" rx="14" fill="#22314a" stroke="#101a2b" stroke-width="6"/>
+      <rect x="12" y="14" width="146" height="18" rx="4" fill="#3a4f72"/>
+      <rect x="12" y="40" width="146" height="18" rx="4" fill="#3a4f72"/>
+      <rect x="12" y="66" width="146" height="18" rx="4" fill="#3a4f72"/>
+      <circle cx="140" cy="23" r="4" fill="#39e07a"/>
+      <circle cx="140" cy="49" r="4" fill="#39e07a"/>
+      <circle cx="140" cy="75" r="4" fill="#ffb545"/>
+      <circle cx="60" cy="46" r="30" fill="#0d6e94" opacity="0.9"/>
+      <path d="M50 32 L76 46 L50 60 Z" fill="#fdf6ff"/>
+    </g>
+
+    <!-- PROD ribbon badge -->
+    <g transform="translate(352,300) rotate(30)">
+      <rect x="-56" y="-16" width="112" height="32" fill="#d5342c" stroke="#7a1a15" stroke-width="4"/>
+      <text x="0" y="6" font-family="Helvetica, Arial, sans-serif" font-size="18" font-weight="bold" fill="#ffffff" text-anchor="middle">PROD</text>
+    </g>
+  </g>
+
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#08344a" stroke-width="8"/>
+</svg>
