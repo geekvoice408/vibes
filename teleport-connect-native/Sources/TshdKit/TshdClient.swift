@@ -30,6 +30,17 @@ public final class TshdClient: Sendable {
         grpcClient.beginGracefulShutdown()
     }
 
+    /// Must be called before any other RPC on this service — see service.proto's doc comment
+    /// on UpdateTshdEventsServerAddress. `address` should look like `unix:///path/to/socket`,
+    /// matching the scheme tshd's own `--addr` flag uses.
+    public func updateTshdEventsServerAddress(_ address: String) async throws {
+        var request = Teleport_Lib_Teleterm_V1_UpdateTshdEventsServerAddressRequest()
+        request.address = address
+        _ = try await terminal.updateTshdEventsServerAddress(
+            request: ClientRequest(message: request)
+        )
+    }
+
     public func listRootClusters() async throws -> Teleport_Lib_Teleterm_V1_ListClustersResponse {
         try await terminal.listRootClusters(
             request: ClientRequest(message: Teleport_Lib_Teleterm_V1_ListClustersRequest())

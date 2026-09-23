@@ -46,7 +46,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "TeleportConnectNative",
-            dependencies: ["TshdKit", "TshdProto", "SwiftTerm"],
+            dependencies: [
+                "TshdKit", "TshdProto", "SwiftTerm",
+                .product(name: "GRPCCore", package: "grpc-swift-2"),
+                .product(name: "GRPCProtobuf", package: "grpc-swift-protobuf"),
+                .product(name: "GRPCNIOTransportHTTP2Posix", package: "grpc-swift-nio-transport"),
+            ],
             resources: [.copy("Resources/ResourceIcons")]
         ),
     ]

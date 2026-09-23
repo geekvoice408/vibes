@@ -45,4 +45,7 @@ let customResourceIconSpecs: [String: (dark: String, light: String)] = [
     // Original icon (no real brand to match) for this specific personal server: beach/media
     // server/production themed per request.
     "ventura": (dark: "ventura.svg", light: "ventura.svg"),
+
+    // Servers with a "work-tools" label (name or value) get a crossed hammer/wrench icon.
+    "worktools": (dark: "work-tools.svg", light: "work-tools.svg"),
 ]

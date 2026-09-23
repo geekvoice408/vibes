@@ -102,6 +102,15 @@ enum PasswordlessState: Equatable {
     case choosingCredential([String])
 }
 
+/// Driven by TshdEventsServer's promptMFA handler — tshd calls back into us mid-Login when the
+/// cluster requires a second factor (e.g. per-session MFA on a local-auth login), which a plain
+/// unary RPC can't do on its own. See tshd_events_service.proto's PromptMFA doc comment.
+enum MFAPromptState: Equatable {
+    case none
+    case waitingForWebAuthnTap
+    case enteringTOTP
+}
+
 /// Mirrors TabHost's documents: the always-present Resources tab (doc.cluster) plus any number
 /// of terminal tabs (doc.terminal_tsh_node for SSH sessions, doc.terminal_shell for a local
 /// shell), each backed by a real PTY via TerminalHostView/SwiftTerm.
@@ -216,6 +225,9 @@ final class AppModel {
     var passwordlessState: PasswordlessState = .waitingForTap
     var passwordlessPIN = ""
     private var passwordlessPINResponder: (@Sendable (String) -> Void)?
+    var mfaPromptState: MFAPromptState = .none
+    var mfaTOTPCode = ""
+    private var mfaTOTPResponder: (@Sendable (String) -> Void)?
     private var passwordlessCredentialResponder: (@Sendable (Int) -> Void)?
 
     /// Set once tshd's SSO redirect URL is captured from its stderr — see
@@ -330,6 +342,7 @@ final class AppModel {
     private var tshd: TshdProcess?
     private var client: TshdClient?
     private var connectionTask: Task<Void, Never>?
+    private var eventsServerTask: Task<Void, Never>?
 
     func start() async {
         browserChoice = BrowserChoice(rawValue: UserDefaults.standard.string(forKey: "browserChoice") ?? "") ?? .systemDefault
@@ -352,6 +365,13 @@ final class AppModel {
             self.client = client
 
             connectionTask = Task { try? await client.run() }
+
+            // Must happen before any other TerminalService RPC (service.proto's doc comment on
+            // UpdateTshdEventsServerAddress) — tshd needs somewhere to call back into for MFA
+            // prompts, relogin, etc. before it'll do anything else with us.
+            let eventsServer = TshdEventsServer(socketPath: process.eventsSocketPath, model: self)
+            eventsServerTask = try await eventsServer.start()
+            try await client.updateTshdEventsServerAddress("unix://\(process.eventsSocketPath)")
 
             let response = try await client.listRootClusters()
             clusters = response.clusters.map {
@@ -470,6 +490,10 @@ final class AppModel {
             if providers.count == 1, !settings.localAuthEnabled {
                 await loginWithSSO(clusterURI: clusterURI, provider: providers[0])
             } else {
+                if settings.localAuthEnabled, let saved = KeychainCredentialStore.load(clusterURI: clusterURI) {
+                    loginUsername = saved.username
+                    loginPassword = saved.password
+                }
                 loginState = .choosingProvider(
                     clusterURI: clusterURI,
                     providers: providers,
@@ -553,6 +577,36 @@ final class AppModel {
         passwordlessCredentialResponder = nil
     }
 
+    /// Called from TshdEventsServer's promptMFA handler when the cluster wants WebAuthn/Touch ID.
+    /// tshd performs the actual system prompt itself once we've acknowledged; we just show a
+    /// waiting state while that happens.
+    func beginMFAWebAuthnWait() {
+        mfaPromptState = .waitingForWebAuthnTap
+    }
+
+    /// Called from TshdEventsServer's promptMFA handler when TOTP is the (only) offered method.
+    /// `respond` resumes the gRPC handler that's blocked waiting for this — call it exactly once.
+    func beginMFATOTPPrompt(respond: @Sendable @escaping (String) -> Void) {
+        mfaTOTPResponder = respond
+        mfaPromptState = .enteringTOTP
+    }
+
+    func submitMFATOTP() {
+        mfaTOTPResponder?(mfaTOTPCode)
+        mfaTOTPResponder = nil
+        mfaTOTPCode = ""
+        mfaPromptState = .none
+    }
+
+    private func clearMFAPrompt() {
+        // Resume any pending TOTP wait with an empty code rather than leaving tshd's promptMFA
+        // call hanging until it times out on its own.
+        mfaTOTPResponder?("")
+        mfaTOTPResponder = nil
+        mfaTOTPCode = ""
+        mfaPromptState = .none
+    }
+
     /// Mirrors loginLocal() in useClusterLogin.ts.
     func loginWithLocalCredentials(clusterURI: String) async {
         guard let client else { return }
@@ -564,8 +618,11 @@ final class AppModel {
                 password: loginPassword,
                 otpToken: loginOTP
             )
+            KeychainCredentialStore.save(clusterURI: clusterURI, username: loginUsername, password: loginPassword)
+            clearMFAPrompt()
             await finishLogin(clusterURI: clusterURI)
         } catch {
+            clearMFAPrompt()
             loginState = .failed(String(describing: error))
         }
     }
@@ -579,6 +636,7 @@ final class AppModel {
         passwordlessPINResponder = nil
         passwordlessCredentialResponder = nil
         ssoBrowserURL = nil; ssoBrowserCurrentURL = nil
+        clearMFAPrompt()
     }
 
     /// Mirrors syncAndWatchRootClusterWithErrorHandling — refreshes the cluster's connected
@@ -652,9 +710,19 @@ final class AppModel {
         switch oneOf {
         case .server(let server):
             let boardInfo = server.labels.first { $0.name.caseInsensitiveCompare("board_info") == .orderedSame }?.value ?? ""
+            let cloudLabel = server.labels.first { $0.name.caseInsensitiveCompare("cloud") == .orderedSame }?.value ?? ""
+            let hasWorkToolsLabel = server.labels.contains {
+                $0.name.caseInsensitiveCompare("work-tools") == .orderedSame
+                    || $0.value.caseInsensitiveCompare("work-tools") == .orderedSame
+            }
             let iconName: String
             if boardInfo.lowercased().contains("raspberry") || boardInfo.lowercased().contains("rasberry") {
                 iconName = "raspberrypi"
+            } else if cloudLabel.caseInsensitiveCompare("aws") == .orderedSame {
+                // Reuses Teleport's own bundled "ec2" icon (the AWS logo) rather than a new one.
+                iconName = "ec2"
+            } else if hasWorkToolsLabel {
+                iconName = "worktools"
             } else if resourceIconSpecs[server.hostname.lowercased()] != nil {
                 // Direct name match (e.g. a server named after something with a registered
                 // icon, real brand or custom) — same idea as guessAppIcon's direct lookup step.

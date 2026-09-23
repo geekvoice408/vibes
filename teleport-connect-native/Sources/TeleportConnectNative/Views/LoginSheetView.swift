@@ -106,9 +106,42 @@ struct LoginSheetView: View {
                 }
 
             case .syncing:
-                centered {
-                    ProgressView()
-                    Text("Syncing cluster…").font(Theme.uiFontSmall).foregroundStyle(Theme.textMuted)
+                switch model.mfaPromptState {
+                case .none:
+                    centered {
+                        ProgressView()
+                        Text("Syncing cluster…").font(Theme.uiFontSmall).foregroundStyle(Theme.textMuted)
+                    }
+
+                case .waitingForWebAuthnTap:
+                    centered {
+                        Image(systemName: "hand.tap").font(.title).foregroundStyle(Theme.brand)
+                        Text("Touch your security key").font(Theme.uiFontMedium)
+                        Text("Or complete the Touch ID prompt if you have one set up.")
+                            .font(Theme.uiFontSmall)
+                            .foregroundStyle(Theme.textMuted)
+                            .multilineTextAlignment(.center)
+                        Button("Cancel") { model.cancelLogin() }
+                    }
+
+                case .enteringTOTP:
+                    VStack(alignment: .leading, spacing: Theme.space[2]) {
+                        Text("Enter your authenticator code").font(Theme.uiFontMedium)
+                        TextField("6-digit code", text: Binding(
+                            get: { model.mfaTOTPCode },
+                            set: { model.mfaTOTPCode = $0 }
+                        ))
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { model.submitMFATOTP() }
+                        HStack {
+                            Spacer()
+                            Button("Cancel") { model.cancelLogin() }
+                            Button("Continue") { model.submitMFATOTP() }
+                                .buttonStyle(.borderedProminent)
+                                .tint(Theme.brand)
+                                .disabled(model.mfaTOTPCode.isEmpty)
+                        }
+                    }
                 }
 
             case .failed(let message):
@@ -249,17 +282,22 @@ struct LoginSheetView: View {
 
     private func localLoginForm(clusterURI: String) -> some View {
         VStack(alignment: .leading, spacing: Theme.space[2]) {
-            TextField("Username", text: Binding(
-                get: { model.loginUsername },
-                set: { model.loginUsername = $0 }
-            ))
-            .textFieldStyle(.roundedBorder)
-
-            SecureField("Password", text: Binding(
-                get: { model.loginPassword },
-                set: { model.loginPassword = $0 }
-            ))
-            .textFieldStyle(.roundedBorder)
+            NativeCredentialFieldsView(
+                username: Binding(
+                    get: { model.loginUsername },
+                    set: { model.loginUsername = $0 }
+                ),
+                password: Binding(
+                    get: { model.loginPassword },
+                    set: { model.loginPassword = $0 }
+                ),
+                onSubmit: {
+                    if !model.loginUsername.isEmpty && !model.loginPassword.isEmpty {
+                        Task { await model.loginWithLocalCredentials(clusterURI: clusterURI) }
+                    }
+                }
+            )
+            .frame(height: 24 * 2 + Theme.space[2])
 
             TextField("2FA code (if required)", text: Binding(
                 get: { model.loginOTP },

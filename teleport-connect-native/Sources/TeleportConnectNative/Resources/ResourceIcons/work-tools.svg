@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect x="40" y="40" width="432" height="432" rx="48" fill="#5C6B7A"/>
+
+  <!-- Wrench: ring head pointing up-left -->
+  <g transform="rotate(-45 256 256)">
+    <rect x="230" y="220" width="52" height="200" rx="20" fill="#ECEFF2"/>
+    <circle cx="256" cy="170" r="58" fill="#ECEFF2"/>
+    <circle cx="256" cy="170" r="30" fill="#5C6B7A"/>
+  </g>
+
+  <!-- Hammer: rectangular head pointing up-right -->
+  <g transform="rotate(45 256 256)">
+    <rect x="234" y="220" width="44" height="210" rx="18" fill="#D8DEE4"/>
+    <rect x="188" y="150" width="136" height="76" rx="16" fill="#D8DEE4"/>
+  </g>
+</svg>

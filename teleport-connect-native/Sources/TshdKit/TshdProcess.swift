@@ -22,6 +22,11 @@ public actor TshdProcess {
 
     /// The Unix domain socket path tshd is listening on once ready.
     public nonisolated let socketPath: String
+    /// The Unix domain socket path our own TshdEventsServer listens on — tshd calls back into
+    /// this to ask us to prompt for MFA, hardware key touches, relogin, etc. (see
+    /// service.proto's UpdateTshdEventsServerAddress: "This RPC needs to be made before any
+    /// other from this service.").
+    public nonisolated let eventsSocketPath: String
     private nonisolated let supportDir: URL
 
     private var process: Process?
@@ -34,6 +39,7 @@ public actor TshdProcess {
             .appendingPathComponent("tcn-\(UUID().uuidString.prefix(8))", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.socketPath = dir.appendingPathComponent("tshd.sock").path
+        self.eventsSocketPath = dir.appendingPathComponent("tshde.sock").path
         self.supportDir = dir
 
         for sub in ["certs", "kubeconfigs", "agents", "fakebin"] {
@@ -188,10 +194,16 @@ public actor TshdProcess {
     }
 
     private var ssoURLContinuation: CheckedContinuation<URL?, Never>?
+    /// Where in `outputBuffer` the current SSO attempt started watching from. Without this,
+    /// a second SSO login in the same running app session would match the *first* attempt's
+    /// (by-then-closed) local callback URL out of the accumulated history — surfacing as a
+    /// blank WebView followed by "connection refused" when falling back to a real browser.
+    private var ssoSearchMarker: String.Index?
 
     private func appendOutput(_ text: String) {
         outputBuffer += text
-        if ssoURLContinuation != nil, let url = Self.extractSSOLoginURL(from: text) {
+        guard ssoURLContinuation != nil, let marker = ssoSearchMarker else { return }
+        if let url = Self.extractSSOLoginURL(from: String(outputBuffer[marker...])) {
             resolveSSOURLWaiter(url)
         }
     }
@@ -199,8 +211,13 @@ public actor TshdProcess {
     /// Waits for tshd to print the clickable SSO login URL (lib/client/sso/redirector.go's
     /// processLoginURL — printed to stderr unconditionally, whether or not a browser actually
     /// opened) during an in-flight Login RPC. Call this concurrently with the Login call.
+    ///
+    /// Only ever matches output appended after this call starts, so a stale URL from an earlier
+    /// SSO attempt (a different cluster, or a retry) in this same process can't be picked up.
     public func awaitSSOLoginURL(timeout: Duration = .seconds(20)) async -> URL? {
-        if let url = Self.extractSSOLoginURL(from: outputBuffer) {
+        let marker = outputBuffer.endIndex
+        ssoSearchMarker = marker
+        if let url = Self.extractSSOLoginURL(from: String(outputBuffer[marker...])) {
             return url
         }
         return await withCheckedContinuation { continuation in

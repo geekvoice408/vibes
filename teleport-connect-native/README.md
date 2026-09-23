@@ -11,7 +11,12 @@ Teleport Connect's Electron app is a thin UI layer over `tshd`, a Go daemon that
 - Spawns `tsh daemon start` and connects over a Unix domain socket with `grpc-swift` — no TLS needed, same as Electron does on macOS.
 - Lists your `tsh` profiles/clusters and lets you switch between them, log in, and log out.
   - SSO providers open an **in-app WebView** for the sign-in flow (instead of handing off to the system browser), with an "Open in Browser" escape hatch for providers that need real WebAuthn/passkey entitlements or Web Bluetooth (neither of which an embedded/ad-hoc-signed WKWebView can do).
-  - Local (username/password) and passwordless/WebAuthn login both work natively.
+  - Local (username/password) and passwordless/WebAuthn login both work natively, including
+    per-session MFA (a Touch ID/security key tap, or a TOTP code) via a small gRPC server this
+    app runs itself — `TshdEventsService`, which tshd calls *into* mid-login when it needs
+    something a plain request/response can't provide.
+  - Saved local-login credentials are pre-filled from the Keychain next time you log in to the
+    same cluster.
 - Browses cluster resources (servers, databases, Kubernetes clusters, apps, Windows desktops) as a grid or list, with type filtering, search-as-you-sort, pinning, and a resource count in the status bar.
   - **Health status filtering** for databases/Kubernetes clusters: filter by healthy/unhealthy/unknown, and unhealthy resources get a warning badge with a popover showing the status/message/error tshd reported.
 - Opens a **real embedded terminal** for SSH sessions and local shells — [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) allocates an actual PTY and runs `tsh ssh ...` attached to it, the same approach Electron's `node-pty` takes.
@@ -62,13 +67,17 @@ Sources/
   TshdProto/    generated gRPC/protobuf Swift code for tshd's TerminalService, VnetService, AutoUpdateService
   TshdKit/      TshdProcess (spawns/monitors tshd) + TshdClient (gRPC calls, incl. streaming passwordless login)
   TeleportConnectNative/
-    AppModel.swift          central @Observable state — clusters, resources, tabs, login flow
-    AppConfig.swift          app_config.json schema (mirrors Electron's appConfigSchema.ts)
+    AppModel.swift            central @Observable state — clusters, resources, tabs, login flow
+    AppConfig.swift           app_config.json schema (mirrors Electron's appConfigSchema.ts)
     CustomIconStore.swift     persists user-uploaded custom resource icons
+    KeychainCredentialStore.swift  saves/prefills local-login credentials via the Keychain
+    TshdEventsServer.swift    the server side of TshdEventsService — handles tshd's MFA/
+                              hardware-key/relogin callbacks (see "What it does" above)
     GuessAppIcon.swift       ported icon-matching heuristic from shared/components/UnifiedResources
     ResourceIconSpecs*.swift generated + hand-maintained icon name -> SVG/PNG filename tables
     Views/                   TopBar, TabStrip, ResourceList/Card/List, LoginSheet, SSOBrowser,
-                              Settings, TerminalHost, StatusBar
+                              Settings, TerminalHost, StatusBar, NativeCredentialFieldsView
+                              (real AppKit text fields for Password AutoFill's key-icon UI)
     Resources/ResourceIcons/  ~400 bundled brand SVGs
 ```
 
