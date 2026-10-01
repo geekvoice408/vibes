@@ -1,0 +1,17 @@
+services:
+  teleport-slack:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config.toml:/etc/teleport-slack/config.toml:ro
+      - beams-profiles:/var/lib/teleport-slack/beams
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  beams-profiles:
+

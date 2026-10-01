@@ -1,0 +1,24 @@
+[teleport]
+addr = "example.teleport.sh:443"
+identity = "/var/lib/teleport-slack/plugin-identity"
+
+[slack]
+token = "/var/lib/teleport-slack/slack-bot-token"
+
+[review]
+enabled = false
+app_token = "/var/lib/teleport-slack/slack-app-token"
+
+[beams]
+enabled = true
+tsh_path = "/usr/local/bin/tsh"
+profiles_dir = "/var/lib/teleport-slack/beams"
+callback_url = "https://slack-plugin.example.com/beams/callback"
+command_timeout = "2m"
+
+[role_to_recipients]
+"*" = ["beams-access"]
+
+[log]
+output = "stderr"
+severity = "INFO"

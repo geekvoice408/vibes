@@ -1,0 +1,407 @@
+diff --git a/integrations/access/slack/Dockerfile.beams b/integrations/access/slack/Dockerfile.beams
+new file mode 100644
+index 0000000000..cfef8b0111
+--- /dev/null
++++ b/integrations/access/slack/Dockerfile.beams
+@@ -0,0 +1,44 @@
++# syntax=docker/dockerfile:1.7
++
++ARG GO_IMAGE=golang:1.26.7-bookworm
++ARG RUNTIME_IMAGE=debian:bookworm-slim
++
++FROM ${GO_IMAGE} AS build
++WORKDIR /src
++
++COPY go.mod go.sum ./
++RUN --mount=type=cache,target=/go/pkg/mod go mod download
++
++COPY . .
++RUN --mount=type=cache,target=/go/pkg/mod \
++    --mount=type=cache,target=/root/.cache/go-build \
++    CGO_ENABLED=0 go build \
++      -tags kustomize_disable_go_plugin_support \
++      -trimpath -ldflags="-w -s" \
++      -o /out/teleport-slack \
++      ./integrations/access/slack/cmd/teleport-slack
++RUN --mount=type=cache,target=/go/pkg/mod \
++    --mount=type=cache,target=/root/.cache/go-build \
++    CGO_ENABLED=0 go build \
++      -trimpath -ldflags="-w -s" \
++      -o /out/tsh \
++      ./tool/tsh
++
++FROM ${RUNTIME_IMAGE}
++RUN apt-get update \
++    && apt-get install --no-install-recommends -y ca-certificates \
++    && rm -rf /var/lib/apt/lists/* \
++    && groupadd --system --gid 10001 teleport-slack \
++    && useradd --system --uid 10001 --gid teleport-slack \
++       --home-dir /var/lib/teleport-slack teleport-slack \
++    && install -d -o teleport-slack -g teleport-slack -m 0700 \
++       /var/lib/teleport-slack/beams
++
++COPY --from=build /out/teleport-slack /usr/local/bin/teleport-slack
++COPY --from=build /out/tsh /usr/local/bin/tsh
++
++USER 10001:10001
++VOLUME ["/var/lib/teleport-slack/beams"]
++EXPOSE 8080
++ENTRYPOINT ["/usr/local/bin/teleport-slack"]
++CMD ["start", "--config=/etc/teleport-slack/config.toml"]
+diff --git a/integrations/access/slack/README.md b/integrations/access/slack/README.md
+index b61b5fe458..5bd367d08f 100644
+--- a/integrations/access/slack/README.md
++++ b/integrations/access/slack/README.md
+@@ -5,5 +5,23 @@ an alert to a Slack channel when an access request is created. You can find the
+ Teleport Access API in the main Teleport repository and the Slack access request
+ plugin in `github.com/gravitational/teleport/integrations/access/slack`.
+ 
++## Beams-enabled container
++
++`Dockerfile.beams` builds both `teleport-slack` and a matching `tsh` binary so
++the `/beams` command does not depend on tools installed on the host. Per-user
++Teleport profiles are stored in `/var/lib/teleport-slack/beams`; mount this path
++on persistent encrypted storage so users do not need to reconnect after every
++container restart.
++
++From the repository root:
++
++```console
++docker compose -f integrations/access/slack/docker-compose.beams.yml up --build
++```
++
++The image runs as UID/GID `10001`, drops all Linux capabilities in the Compose
++example, and only needs outbound access to Slack and configured Teleport
++tenants. Port `8080` is reserved for the per-user SSO callback service.
++
+ If you have a self-hosted Teleport deployment, you can find information for
+ configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
+diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
+new file mode 100644
+index 0000000000..e777f29adb
+--- /dev/null
++++ b/integrations/access/slack/beams_commands.go
+@@ -0,0 +1,110 @@
++package slack
++
++import (
++	"bytes"
++	"context"
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"regexp"
++	"strings"
++	"time"
++
++	"github.com/gravitational/trace"
++	"github.com/mattn/go-shellwords"
++)
++
++const defaultBeamsCommandTimeout = 2 * time.Minute
++
++var safeSlackID = regexp.MustCompile(`^[A-Z0-9]+$`)
++
++// BeamsCommandRunner executes non-interactive tsh beams commands with a
++// Teleport profile isolated to one Slack workspace/user pair.
++type BeamsCommandRunner struct {
++	Config BeamsConfig
++}
++
++func (r BeamsCommandRunner) Run(ctx context.Context, teamID, userID, text string) (string, error) {
++	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) {
++		return "", trace.BadParameter("invalid Slack identity")
++	}
++	words, err := shellwords.Parse(text)
++	if err != nil {
++		return "", trace.BadParameter("invalid command: %v", err)
++	}
++	if len(words) == 0 || words[0] == "help" {
++		return beamsHelp(), nil
++	}
++
++	profileDir := filepath.Join(r.Config.ProfilesDir, teamID, userID)
++	if err := os.MkdirAll(profileDir, 0o700); err != nil {
++		return "", trace.Wrap(err)
++	}
++
++	var args []string
++	switch words[0] {
++	case "connect":
++		if len(words) != 2 {
++			return "", trace.BadParameter("usage: /beams connect <tenant>")
++		}
++		// callback_url is consumed by the HTTP login coordinator in the next
++		// layer; never silently fall back to the plugin's machine identity.
++		return "", trace.NotImplemented("SSO login coordinator for %q at %s is not running", words[1], r.Config.CallbackURL)
++	case "ls":
++		args = []string{"beams", "ls", "--format=json"}
++	case "add":
++		args = append([]string{"beams", "add", "--no-console", "--format=json"}, words[1:]...)
++	case "exec", "publish", "unpublish", "rm", "scp":
++		args = append([]string{"beams"}, words...)
++	case "ssh":
++		return "", trace.BadParameter("interactive SSH is unavailable in Slack; use /beams exec <name> <command>")
++	default:
++		return "", trace.BadParameter("unknown command %q\n%s", words[0], beamsHelp())
++	}
++
++	timeout := defaultBeamsCommandTimeout
++	if r.Config.CommandTTL != "" {
++		timeout, err = time.ParseDuration(r.Config.CommandTTL)
++		if err != nil {
++			return "", trace.BadParameter("invalid beams.command_timeout: %v", err)
++		}
++	}
++	runCtx, cancel := context.WithTimeout(ctx, timeout)
++	defer cancel()
++
++	cmd := exec.CommandContext(runCtx, r.Config.TSHPath, args...)
++	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+profileDir)
++	var stdout, stderr bytes.Buffer
++	cmd.Stdout, cmd.Stderr = &stdout, &stderr
++	if err := cmd.Run(); err != nil {
++		if runCtx.Err() != nil {
++			return "", trace.LimitExceeded("command timed out")
++		}
++		return "", trace.Wrap(err, strings.TrimSpace(stderr.String()))
++	}
++	return truncateSlackOutput(stdout.String()), nil
++}
++
++func beamsHelp() string {
++	return strings.TrimSpace(`/beams connect <tenant>
++/beams ls
++/beams add [--region=<region>]
++/beams exec <name> <command...>
++/beams publish <name> [--tcp]
++/beams unpublish <name>
++/beams rm <name>
++/beams scp <src> <dst>`)
++}
++
++func truncateSlackOutput(s string) string {
++	s = strings.TrimSpace(s)
++	if s == "" {
++		return "Done."
++	}
++	const max = 2800
++	if len(s) > max {
++		return fmt.Sprintf("%s\n… output truncated", s[:max])
++	}
++	return s
++}
+diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
+index a8ecf146bf..80adb88661 100644
+--- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
++++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
+@@ -64,6 +64,15 @@ enabled = false
+ # The trait should hold value of Slack user ID.
+ # slack_user_id_trait = "slack_uid"
+ 
++[beams]
++# Enable the /beams slash command. Each Slack user receives an isolated tsh
++# profile and must authenticate to the Teleport tenant through SSO.
++enabled = false
++tsh_path = "tsh"
++profiles_dir = "/var/lib/teleport-slack/beams"
++callback_url = "https://slack-plugin.example.com/beams/callback"
++command_timeout = "2m"
++
+ [role_to_recipients]
+ # Map roles to recipients.
+ #
+@@ -76,4 +85,4 @@ enabled = false
+ 
+ [log]
+ output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
+-severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
+\ No newline at end of file
++severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
+diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
+index e27fd004c1..dacb1d1f97 100644
+--- a/integrations/access/slack/config.go
++++ b/integrations/access/slack/config.go
+@@ -21,6 +21,8 @@ package slack
+ import (
+ 	"cmp"
+ 	"net/url"
++	"os"
++	"path/filepath"
+ 	"strings"
+ 
+ 	"github.com/go-resty/resty/v2"
+@@ -39,12 +41,22 @@ type Config struct {
+ 	common.BaseConfig
+ 	Slack               common.GenericAPIConfig
+ 	Review              ReviewConfig
++	Beams               BeamsConfig
+ 	AccessTokenProvider auth.AccessTokenProvider `json:"-"`
+ 	AppTokenProvider    auth.AccessTokenProvider `json:"-"`
+ 	StatusSink          common.StatusSink
+ 	Clock               clockwork.Clock
+ }
+ 
++// BeamsConfig configures the /beams Slack command.
++type BeamsConfig struct {
++	Enabled     bool   `toml:"enabled"`
++	TSHPath     string `toml:"tsh_path"`
++	ProfilesDir string `toml:"profiles_dir"`
++	CallbackURL string `toml:"callback_url"`
++	CommandTTL  string `toml:"command_timeout"`
++}
++
+ type ReviewConfig struct {
+ 	Enabled bool `toml:"enabled"`
+ 	// AppToken is the app-level token used for Slack Socket Mode API.
+@@ -131,6 +143,25 @@ func (c *Config) CheckAndSetDefaults() error {
+ 		}
+ 	}
+ 
++	if c.Beams.Enabled {
++		if c.Beams.TSHPath == "" {
++			c.Beams.TSHPath = "tsh"
++		}
++		if c.Beams.ProfilesDir == "" {
++			c.Beams.ProfilesDir = filepath.Join(os.TempDir(), "teleport-slack-beams")
++		}
++		if c.Beams.CallbackURL == "" {
++			return trace.BadParameter("missing required value beams.callback_url")
++		}
++		// Slash commands arrive through Socket Mode and therefore need an app token.
++		if c.AppTokenProvider == nil {
++			if c.Review.AppToken == "" {
++				return trace.BadParameter("missing required value review.app_token for beams commands")
++			}
++			c.AppTokenProvider = auth.NewStaticAccessTokenProvider(c.Review.AppToken)
++		}
++	}
++
+ 	if c.Log.Output == "" {
+ 		c.Log.Output = "stderr"
+ 	}
+diff --git a/integrations/access/slack/docker-compose.beams.yml b/integrations/access/slack/docker-compose.beams.yml
+new file mode 100644
+index 0000000000..9830308ab7
+--- /dev/null
++++ b/integrations/access/slack/docker-compose.beams.yml
+@@ -0,0 +1,18 @@
++services:
++  teleport-slack:
++    build:
++      context: ../../..
++      dockerfile: integrations/access/slack/Dockerfile.beams
++    restart: unless-stopped
++    ports:
++      - "8080:8080"
++    volumes:
++      - ./cmd/teleport-slack/example_config.toml:/etc/teleport-slack/config.toml:ro
++      - beams-profiles:/var/lib/teleport-slack/beams
++    security_opt:
++      - no-new-privileges:true
++    cap_drop:
++      - ALL
++
++volumes:
++  beams-profiles:
+diff --git a/integrations/access/slack/socketmode.go b/integrations/access/slack/socketmode.go
+index 831a3ddb02..78f4a422e9 100644
+--- a/integrations/access/slack/socketmode.go
++++ b/integrations/access/slack/socketmode.go
+@@ -293,7 +293,7 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
+ 
+ 				// Socket Mode server wants to rebuild WebSocket connection.
+ 				return trace.Wrap(ErrSocketModeDisconnect)
+-			case SocketModeEventTypeInteractive:
++			case SocketModeEventTypeInteractive, SocketModeEventTypeSlashCommands:
+ 				log.DebugContext(ctx, "Received interaction event")
+ 
+ 				// Send an ack to the write goroutine immediately.
+diff --git a/integrations/access/slack/socketmode_test.go b/integrations/access/slack/socketmode_test.go
+index 60e14372f3..e577d4b406 100644
+--- a/integrations/access/slack/socketmode_test.go
++++ b/integrations/access/slack/socketmode_test.go
+@@ -53,6 +53,20 @@ var nonBlockActionsPayload = `{
+ 	}
+ }`
+ 
++var slashCommandPayload = `{
++	"type":"slash_commands",
++	"envelope_id":"env-1",
++	"payload":{
++		"type":"slash_commands",
++		"command":"/beams",
++		"text":"ls",
++		"user_id":"U1",
++		"team_id":"T1",
++		"channel_id":"C1",
++		"response_url":"https://hooks.slack.test/response"
++	}
++}`
++
+ var disconnectPayload = `{
+   	"type": "disconnect",
+   	"reason": "warning",
+@@ -128,6 +142,12 @@ func TestParseEvents(t *testing.T) {
+ 			wantAck:        true,
+ 			hasInteraction: true,
+ 		},
++		{
++			name:           "slash command payload",
++			payload:        slashCommandPayload,
++			wantAck:        true,
++			hasInteraction: true,
++		},
+ 		{
+ 			name:    "malformed payload; skip",
+ 			payload: malformedPayload,
+diff --git a/integrations/access/slack/types.go b/integrations/access/slack/types.go
+index cdb88fc592..201f0443b9 100644
+--- a/integrations/access/slack/types.go
++++ b/integrations/access/slack/types.go
+@@ -30,6 +30,7 @@ const (
+ 	SocketModeEventTypeHello          = "hello"
+ 	SocketModeEventTypeDisconnect     = "disconnect"
+ 	SocketModeEventTypeInteractive    = "interactive"
++	SocketModeEventTypeSlashCommands  = "slash_commands"
+ 	SocketModeEventReasonLinkDisabled = "link_disabled"
+ )
+ 
+@@ -146,6 +147,10 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
+ 		var val BlockActionsEvent
+ 		err = trace.Wrap(json.Unmarshal(data, &val))
+ 		interaction = val
++	case SlashCommandEvent{}.Type():
++		var val SlashCommandEvent
++		err = trace.Wrap(json.Unmarshal(data, &val))
++		interaction = val
+ 	default:
+ 		err = trace.BadParameter("unsupported interaction event type %q", interactionType.Type)
+ 	}
+@@ -156,6 +161,25 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
+ 	return interaction, nil
+ }
+ 
++// SlashCommandEvent is delivered by Slack Socket Mode for a slash command.
++type SlashCommandEvent struct {
++	PayloadType string `json:"type"`
++	Command     string `json:"command"`
++	Text        string `json:"text"`
++	ResponseURL string `json:"response_url"`
++	TriggerID   string `json:"trigger_id"`
++	UserID      string `json:"user_id"`
++	UserName    string `json:"user_name"`
++	TeamID      string `json:"team_id"`
++	TeamDomain  string `json:"team_domain"`
++	ChannelID   string `json:"channel_id"`
++	ChannelName string `json:"channel_name"`
++}
++
++func (SlashCommandEvent) Type() InteractionEventType {
++	return InteractionEventType("slash_commands")
++}
++
+ type BlockActionsEvent struct {
+ 	User          User            `json:"user"`
+ 	Team          json.RawMessage `json:"team"`
