@@ -27,8 +27,7 @@ RUN curl -fsSL \
       "https://cdn.teleport.dev/teleport-v${TSH_VERSION}-linux-amd64-bin.tar.gz" \
       -o /tmp/teleport.tar.gz \
     && tar -xzf /tmp/teleport.tar.gz -C /tmp \
-    && install -m 0755 /tmp/teleport/tsh /out/tsh \
-    && install -m 0755 /tmp/teleport/tctl /out/tctl
+    && install -m 0755 /tmp/teleport/tsh /out/tsh
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -41,7 +40,6 @@ RUN apt-get update \
        /var/lib/teleport-slack/beams
 COPY --from=build /out/teleport-slack /usr/local/bin/teleport-slack
 COPY --from=build /out/tsh /usr/local/bin/tsh
-COPY --from=build /out/tctl /usr/local/bin/tctl
 USER 10001:10001
 VOLUME ["/var/lib/teleport-slack/beams"]
 EXPOSE 8080

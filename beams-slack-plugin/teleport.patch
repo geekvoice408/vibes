@@ -78,10 +78,10 @@ index b61b5fe458..5bd367d08f 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 0000000000..ae761b6ab0
+index 0000000000..c8f67f007d
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,154 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -101,6 +101,7 @@ index 0000000000..ae761b6ab0
 +
 +	"github.com/gravitational/trace"
 +
++	delegationv1 "github.com/gravitational/teleport/api/gen/proto/go/teleport/delegation/v1"
 +	"github.com/gravitational/teleport/integrations/access/common"
 +	"github.com/gravitational/teleport/integrations/lib"
 +	"github.com/gravitational/teleport/integrations/lib/logger"
@@ -143,6 +144,16 @@ index 0000000000..ae761b6ab0
 +		return trace.BadParameter("bot does not support Beams slash commands")
 +	}
 +	a.socketModeClient = NewSocketModeClient(a.bot)
++	delegationClient, ok := baseApp.APIClient.(interface {
++		DelegationSessionServiceClient() delegationv1.DelegationSessionServiceClient
++	})
++	if !ok {
++		return trace.BadParameter("Teleport client does not support delegation sessions")
++	}
++	a.runner = BeamsCommandRunner{
++		Config:           a.conf,
++		DelegationClient: delegationClient.DelegationSessionServiceClient(),
++	}
 +	return nil
 +}
 +
@@ -227,15 +238,17 @@ index 0000000000..ae761b6ab0
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..2dce62e009
+index 0000000000..ab658e7549
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,212 @@
 +package slack
 +
 +import (
 +	"bytes"
 +	"context"
++	"crypto/rand"
++	"crypto/rsa"
 +	"fmt"
 +	"os"
 +	"os/exec"
@@ -244,8 +257,15 @@ index 0000000000..2dce62e009
 +	"strings"
 +	"time"
 +
++	"github.com/google/uuid"
 +	"github.com/gravitational/trace"
 +	"github.com/mattn/go-shellwords"
++	"golang.org/x/crypto/ssh"
++	"google.golang.org/protobuf/types/known/durationpb"
++
++	delegationv1 "github.com/gravitational/teleport/api/gen/proto/go/teleport/delegation/v1"
++	"github.com/gravitational/teleport/api/identityfile"
++	"github.com/gravitational/teleport/api/utils/keys"
 +)
 +
 +const defaultBeamsCommandTimeout = 2 * time.Minute
@@ -255,7 +275,8 @@ index 0000000000..2dce62e009
 +// BeamsCommandRunner executes non-interactive tsh beams commands with a
 +// Teleport profile isolated to one Slack workspace/user pair.
 +type BeamsCommandRunner struct {
-+	Config BeamsConfig
++	Config           BeamsConfig
++	DelegationClient delegationv1.DelegationSessionServiceClient
 +}
 +
 +func (r BeamsCommandRunner) Run(ctx context.Context, teamID, userID, text string) (string, error) {
@@ -280,17 +301,24 @@ index 0000000000..2dce62e009
 +	}
 +
 +	identityPath := filepath.Join(profileDir, "identity")
-+	if err := r.mintIdentity(ctx, username, identityPath); err != nil {
-+		return "", trace.Wrap(err, "creating short-lived Beams identity")
-+	}
++	sessionPath := filepath.Join(profileDir, "delegation-session")
 +
 +	var args []string
 +	switch words[0] {
 +	case "connect":
-+		if len(words) != 1 {
-+			return "", trace.BadParameter("usage: /beams connect")
++		if len(words) != 2 {
++			return "", trace.BadParameter("usage: /beams connect <delegation-session-id>")
 +		}
-+		return fmt.Sprintf("Connected to %s as %s with a short-lived impersonated identity.", r.Config.Proxy, username), nil
++		if _, err := uuid.Parse(words[1]); err != nil {
++			return "", trace.BadParameter("invalid delegation session ID")
++		}
++		if err := r.generateDelegatedIdentity(ctx, words[1], username, identityPath); err != nil {
++			return "", trace.Wrap(err, "validating delegation session")
++		}
++		if err := os.WriteFile(sessionPath, []byte(words[1]), 0o600); err != nil {
++			return "", trace.Wrap(err)
++		}
++		return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
 +	case "ls":
 +		args = []string{"beams", "ls", "--format=json"}
 +	case "add":
@@ -301,6 +329,17 @@ index 0000000000..2dce62e009
 +		return "", trace.BadParameter("interactive SSH is unavailable in Slack; use /beams exec <name> <command>")
 +	default:
 +		return "", trace.BadParameter("unknown command %q\n%s", words[0], beamsHelp())
++	}
++
++	sessionID, err := os.ReadFile(sessionPath)
++	if err != nil {
++		if os.IsNotExist(err) {
++			return "", trace.AccessDenied("not connected; create a delegation session and run /beams connect <session-id>")
++		}
++		return "", trace.Wrap(err)
++	}
++	if err := r.generateDelegatedIdentity(ctx, strings.TrimSpace(string(sessionID)), username, identityPath); err != nil {
++		return "", trace.Wrap(err, "refreshing delegated Beams identity")
 +	}
 +
 +	timeout := defaultBeamsCommandTimeout
@@ -330,7 +369,10 @@ index 0000000000..2dce62e009
 +	return truncateSlackOutput(stdout.String()), nil
 +}
 +
-+func (r BeamsCommandRunner) mintIdentity(ctx context.Context, username, identityPath string) error {
++func (r BeamsCommandRunner) generateDelegatedIdentity(ctx context.Context, sessionID, username, identityPath string) error {
++	if r.DelegationClient == nil {
++		return trace.BadParameter("delegation client is not configured")
++	}
 +	ttl, err := time.ParseDuration(r.Config.IdentityTTL)
 +	if err != nil {
 +		return trace.BadParameter("invalid beams.identity_ttl: %v", err)
@@ -339,28 +381,59 @@ index 0000000000..2dce62e009
 +		return trace.BadParameter("beams.identity_ttl must be between 1s and 1h")
 +	}
 +
-+	cmd := exec.CommandContext(ctx, r.Config.TCTLPath,
-+		"--auth-server="+r.Config.Proxy,
-+		"--identity="+r.Config.PluginIdentity,
-+		"auth", "sign",
-+		"--user="+username,
-+		"--out="+identityPath,
-+		"--ttl="+ttl.String(),
-+		"--overwrite",
-+	)
-+	var stderr bytes.Buffer
-+	cmd.Stderr = &stderr
-+	if err := cmd.Run(); err != nil {
-+		return trace.Wrap(err, strings.TrimSpace(stderr.String()))
++	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
++	if err != nil {
++		return trace.Wrap(err)
 +	}
-+	if err := os.Chmod(identityPath, 0o600); err != nil {
++	sshPublicKey, err := ssh.NewPublicKey(privateKey.Public())
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	tlsPublicKey, err := keys.MarshalPublicKey(privateKey.Public())
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	response, err := r.DelegationClient.GenerateCerts(ctx, &delegationv1.GenerateCertsRequest{
++		DelegationSessionId: sessionID,
++		SshPublicKey:        ssh.MarshalAuthorizedKey(sshPublicKey),
++		TlsPublicKey:        tlsPublicKey,
++		Ttl:                 durationpb.New(ttl),
++	})
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	certificate, _, err := keys.X509Certificate(response.GetTls())
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	if certificate.Subject.CommonName != username {
++		return trace.AccessDenied("delegation session belongs to %q, expected %q", certificate.Subject.CommonName, username)
++	}
++
++	privateKeyPEM, err := keys.MarshalPrivateKey(privateKey)
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	botIdentity, err := identityfile.ReadFile(r.Config.PluginIdentity)
++	if err != nil {
++		return trace.Wrap(err, "reading Machine ID identity")
++	}
++	delegatedIdentity := &identityfile.IdentityFile{
++		PrivateKey: privateKeyPEM,
++		Certs: identityfile.Certs{
++			SSH: response.GetSsh(),
++			TLS: response.GetTls(),
++		},
++		CACerts: botIdentity.CACerts,
++	}
++	if err := identityfile.Write(delegatedIdentity, identityPath); err != nil {
 +		return trace.Wrap(err)
 +	}
 +	return nil
 +}
 +
 +func beamsHelp() string {
-+	return strings.TrimSpace(`/beams connect
++	return strings.TrimSpace(`/beams connect <delegation-session-id>
 +/beams ls
 +/beams add [--region=<region>]
 +/beams exec <name> <command...>
@@ -463,10 +536,10 @@ index d0abf811e9..14dd9e2c67 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf..b99edd0d05 100644
+index a8ecf146bf..d3db235515 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,23 @@ enabled = false
+@@ -64,6 +64,22 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
@@ -475,22 +548,21 @@ index a8ecf146bf..b99edd0d05 100644
 +# profile and must authenticate to the Teleport tenant through SSO.
 +enabled = false
 +tsh_path = "tsh"
-+tctl_path = "tctl"
 +proxy = "example.teleport.sh:443"
 +plugin_identity = "/var/lib/teleport/plugins/slack/identity"
 +profiles_dir = "/var/lib/teleport-slack/beams"
 +identity_ttl = "15m"
 +command_timeout = "2m"
 +
-+# Explicit Slack user ID to dedicated Teleport user mapping. For hackathon
-+# safety, each mapped Teleport user should have only the beam-user role.
++# Explicit Slack user ID to Teleport username mapping. A delegation session is
++# accepted only when its user matches this mapping.
 +[beams.users]
 +"U0123456789" = "slack-beams-alice"
 +
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +93,4 @@ enabled = false
+@@ -76,4 +92,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -498,7 +570,7 @@ index a8ecf146bf..b99edd0d05 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c1..3c45c49a1a 100644
+index e27fd004c1..3ba1427c3a 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -510,7 +582,7 @@ index e27fd004c1..3c45c49a1a 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,26 @@ type Config struct {
+@@ -39,12 +41,25 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -525,7 +597,6 @@ index e27fd004c1..3c45c49a1a 100644
 +type BeamsConfig struct {
 +	Enabled        bool              `toml:"enabled"`
 +	TSHPath        string            `toml:"tsh_path"`
-+	TCTLPath       string            `toml:"tctl_path"`
 +	Proxy          string            `toml:"proxy"`
 +	PluginIdentity string            `toml:"plugin_identity"`
 +	ProfilesDir    string            `toml:"profiles_dir"`
@@ -537,16 +608,13 @@ index e27fd004c1..3c45c49a1a 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +147,43 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +146,40 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
 +	if c.Beams.Enabled {
 +		if c.Beams.TSHPath == "" {
 +			c.Beams.TSHPath = "tsh"
-+		}
-+		if c.Beams.TCTLPath == "" {
-+			c.Beams.TCTLPath = "tctl"
 +		}
 +		if c.Beams.Proxy == "" {
 +			c.Beams.Proxy = c.Teleport.Addr
@@ -581,7 +649,7 @@ index e27fd004c1..3c45c49a1a 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +254,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +250,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,
