@@ -15,6 +15,7 @@ Implemented:
 - Slack users authorized by Teleport role, matched by Slack email
 - Short-lived delegated identities isolated per Slack workspace and user
 - `ls`, `add`, `exec`, `claude`, `publish`, `unpublish`, `rm`, and `scp`
+- `@scotty` mentions, DMs, and `scotty ...` messages handled by Claude Code in a beam
 - Rejection of interactive `ssh`
 - Command timeouts and Slack-safe output limits
 - Container and Compose scaffolding
@@ -40,6 +41,28 @@ that user. Beams created earlier through the bot remain reachable.
 inside a beam and posts its answer. It passes `--dangerously-skip-permissions`
 by default (override with `beams.claude_args`) and is bounded by
 `beams.claude_timeout`.
+
+### Scotty: plain-language requests
+
+Mention the app (`@scotty create a beam`), send it a direct message, or start a
+channel message with `scotty`. The plugin picks the beam for the thread, a beam
+named in the message, or the user's newest beam, creating one if needed. It
+then runs Claude Code there with the request. Claude can ask the plugin to
+`publish`, `unpublish`, or `create_beam` by ending its reply with
+`SCOTTY_ACTION:` lines; the plugin runs them and replies in the thread with the
+published URL. Follow-ups in the same thread continue the Claude conversation.
+Published apps are served from port 8080 in the beam.
+
+Slack app setup for Scotty (Socket Mode needs no request URL):
+
+- Event Subscriptions: enable, then subscribe to bot events `app_mention` and
+  `message.im`; add `message.channels` (and `message.groups` for private
+  channels) only if plain `scotty ...` messages without a mention should work
+- Bot token scopes: `app_mentions:read`, `chat:write`, `im:history`, plus
+  `channels:history` / `groups:history` for the optional channel events
+- App Home: enable the Messages tab so users can DM the app
+- Rename the app's bot display name to `scotty`, reinstall, and invite it to
+  channels where it should listen
 
 Slack users are authorized through Teleport: the plugin reads the user's Slack
 email and allows the command when a Teleport user with that username holds

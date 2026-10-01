@@ -244,6 +244,18 @@ It does not renew; switching to `tbot` for bot `scotty` is pending.
 `/beams claude <beam> [--continue] <prompt>` runs `claude -p` in the beam via
 `tsh beams exec`, as one shell-quoted string, with `claude_timeout` (15m).
 
+### Scotty (natural language)
+
+`beams_scotty.go`: Slack `events_api` envelopes (`app_mention`, `message.im`,
+optional `message.channels`) become `BeamsMessageEvent`s. `Ask` picks a beam
+(thread state in `<profile>/threads/<channel>-<thread_ts>`, a beam named in
+the text, or newest by expiry; creates one if none), runs `claude -p` there
+with a prompt describing the `SCOTTY_ACTION: publish|unpublish|create_beam`
+protocol, executes those actions outside the beam, and replies in-thread.
+Same-thread follow-ups pass `--continue`. `tsh beams publish` always exposes
+port 8080. `tsh beams exec` sends its command over SSH, so commands are one
+shell string (`/beams exec <beam> "cd /app && make"`).
+
 ### Delegation flow (after `/beams connect`)
 
 Headless login was removed (see "Resolved: Teleport v18 headless MFA"). The
@@ -423,7 +435,8 @@ The current repository head when this document was created is:
 
 ## Immediate next steps
 
-1. Test bot-mode isolation and `/beams claude` in Slack.
+1. Test bot-mode isolation, `/beams claude`, and `@scotty` in Slack (needs
+   the Event Subscriptions and scopes listed in README).
 2. Move `plugin_identity` to `tbot` for `scotty`, then test `/beams connect`.
 3. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
    `/beams scp`, and `/beams rm`.

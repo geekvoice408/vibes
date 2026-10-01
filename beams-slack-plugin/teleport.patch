@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..39e488b3dda
+index 00000000000..dee15ebc0f3
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,226 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -94,6 +94,7 @@ index 00000000000..39e488b3dda
 +package slack
 +
 +import (
++	"cmp"
 +	"context"
 +	"fmt"
 +	"strings"
@@ -112,10 +113,12 @@ index 00000000000..39e488b3dda
 +	GenerateWebSocketURL(ctx context.Context) (string, error)
 +	PostBeamsReply(ctx context.Context, responseURL, text string) error
 +	LookupEmailByUserID(ctx context.Context, userID string) (string, error)
++	PostBeamsThreadReply(ctx context.Context, channelID, threadTS, text string) error
 +}
 +
 +type beamsRunner interface {
 +	Run(ctx context.Context, teamID, userID, text string) (string, error)
++	Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error)
 +}
 +
 +// BeamsApp consumes /beams commands from Slack Socket Mode.
@@ -125,6 +128,8 @@ index 00000000000..39e488b3dda
 +	runner           beamsRunner
 +	socketModeClient *SocketModeClient
 +	job              lib.ServiceJob
++	// seen drops duplicate deliveries of the same Slack message.
++	seen *recentSet
 +}
 +
 +// NewBeamsApp creates a Beams slash-command application.
@@ -132,6 +137,7 @@ index 00000000000..39e488b3dda
 +	app := &BeamsApp{
 +		conf:   conf,
 +		runner: BeamsCommandRunner{Config: conf},
++		seen:   newRecentSet(1000),
 +	}
 +	app.job = lib.NewServiceJob(app.run)
 +	return app
@@ -197,14 +203,16 @@ index 00000000000..39e488b3dda
 +		for {
 +			select {
 +			case interaction := <-a.socketModeClient.Interactions():
-+				event, ok := interaction.(SlashCommandEvent)
-+				if !ok {
-+					continue
++				switch event := interaction.(type) {
++				case SlashCommandEvent:
++					if event.Command == "/beams" {
++						go a.handleSlashCommand(ctx, event)
++					}
++				case BeamsMessageEvent:
++					if request, ok := scottyRequest(event); ok && a.seen.add(event.Channel+"-"+event.TS) {
++						go a.handleMessage(ctx, event, request)
++					}
 +				}
-+				if event.Command != "/beams" {
-+					continue
-+				}
-+				go a.handleSlashCommand(ctx, event)
 +			case <-ctx.Done():
 +				return
 +			}
@@ -240,6 +248,58 @@ index 00000000000..39e488b3dda
 +	}
 +}
 +
++func (a *BeamsApp) handleMessage(ctx context.Context, event BeamsMessageEvent, request string) {
++	log := logger.Get(ctx).With(
++		"slack_team_id", event.TeamID,
++		"slack_user_id", event.User,
++		"slack_channel_id", event.Channel,
++	)
++	log.InfoContext(ctx, "Handling Beams Slack message")
++
++	threadTS := cmp.Or(event.ThreadTS, event.TS)
++	reply := func(text string) {
++		if err := a.bot.PostBeamsThreadReply(ctx, event.Channel, threadTS, text); err != nil {
++			log.ErrorContext(ctx, "Failed to post Beams thread reply", "error", err)
++		}
++	}
++	reply("On it. Working in your beam; this can take a few minutes.")
++
++	output, err := a.runner.Ask(ctx, event.TeamID, event.User, event.Channel+"-"+threadTS, request)
++	if err != nil {
++		output = fmt.Sprintf("Sorry, that failed: %s", trace.UserMessage(err))
++		log.WarnContext(ctx, "Beams Slack message failed", "error", err)
++	}
++	reply(output)
++}
++
++// recentSet remembers a bounded number of recent keys.
++type recentSet struct {
++	mu    sync.Mutex
++	max   int
++	keys  map[string]struct{}
++	order []string
++}
++
++func newRecentSet(max int) *recentSet {
++	return &recentSet{max: max, keys: make(map[string]struct{})}
++}
++
++// add records key and reports whether it was new.
++func (r *recentSet) add(key string) bool {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	if _, ok := r.keys[key]; ok {
++		return false
++	}
++	r.keys[key] = struct{}{}
++	r.order = append(r.order, key)
++	if len(r.order) > r.max {
++		delete(r.keys, r.order[0])
++		r.order = r.order[1:]
++	}
++	return true
++}
++
 +func formatBeamsReply(output string) string {
 +	output = strings.TrimSpace(output)
 +	if strings.HasPrefix(output, "/beams ") || !strings.Contains(output, "\n") {
@@ -249,10 +309,10 @@ index 00000000000..39e488b3dda
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..3dc26ae77d4
+index 00000000000..b147bd5df21
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,613 @@
+@@ -0,0 +1,645 @@
 +package slack
 +
 +import (
@@ -340,25 +400,11 @@ index 00000000000..3dc26ae77d4
 +		return beamsHelp(), nil
 +	}
 +
-+	profileDir := filepath.Join(r.Config.ProfilesDir, teamID, userID)
-+	if err := os.MkdirAll(profileDir, 0o700); err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+	username, err := r.resolveUser(ctx, userID)
++	s, err := r.newSession(ctx, teamID, userID)
 +	if err != nil {
 +		return "", trace.Wrap(err)
 +	}
-+	s := beamsSession{
-+		runner:      r,
-+		profileDir:  profileDir,
-+		username:    username,
-+		sessionPath: filepath.Join(profileDir, "delegation-session"),
-+	}
-+	if sessionID, err := os.ReadFile(s.sessionPath); err == nil {
-+		s.delegation = strings.TrimSpace(string(sessionID))
-+	} else if !os.IsNotExist(err) {
-+		return "", trace.Wrap(err)
-+	}
++	username := s.username
 +
 +	switch words[0] {
 +	case "connect":
@@ -386,6 +432,34 @@ index 00000000000..3dc26ae77d4
 +	default:
 +		return "", trace.BadParameter("unknown command %q\n%s", words[0], beamsHelp())
 +	}
++}
++
++// newSession authorizes a Slack user and loads their delegation state.
++func (r BeamsCommandRunner) newSession(ctx context.Context, teamID, userID string) (beamsSession, error) {
++	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) {
++		return beamsSession{}, trace.BadParameter("invalid Slack identity")
++	}
++	profileDir := filepath.Join(r.Config.ProfilesDir, teamID, userID)
++	if err := os.MkdirAll(profileDir, 0o700); err != nil {
++		return beamsSession{}, trace.Wrap(err)
++	}
++	username, err := r.resolveUser(ctx, userID)
++	if err != nil {
++		return beamsSession{}, trace.Wrap(err)
++	}
++	s := beamsSession{
++		runner:      r,
++		profileDir:  profileDir,
++		username:    username,
++		sessionPath: filepath.Join(profileDir, "delegation-session"),
++	}
++	if sessionID, err := os.ReadFile(s.sessionPath); err == nil {
++		s.delegation = strings.TrimSpace(string(sessionID))
++	} else if !os.IsNotExist(err) {
++		return beamsSession{}, trace.Wrap(err)
++	}
++
++	return s, nil
 +}
 +
 +func (s beamsSession) connect(ctx context.Context, args []string) (string, error) {
@@ -416,39 +490,47 @@ index 00000000000..3dc26ae77d4
 +	return fmt.Sprintf("Connected to %s as %s. New beams will be owned by your Teleport user.", s.runner.Config.Proxy, s.username), nil
 +}
 +
-+// list shows the user's delegated beams plus the bot-owned beams they created.
-+func (s beamsSession) list(ctx context.Context) (string, error) {
++// beams returns the user's delegated beams plus the bot-owned beams they
++// created.
++func (s beamsSession) beams(ctx context.Context) ([]map[string]any, error) {
 +	botOutput, err := s.tsh(ctx, s.runner.Config.PluginIdentity, "beams", "ls", "--format=json")
 +	if err != nil {
-+		return "", trace.Wrap(err)
++		return nil, trace.Wrap(err)
 +	}
 +	botBeams, err := decodeBeams(botOutput)
 +	if err != nil {
-+		return "", trace.Wrap(err)
++		return nil, trace.Wrap(err)
 +	}
 +	owned, err := s.pruneIndex(botBeams)
 +	if err != nil {
-+		return "", trace.Wrap(err)
++		return nil, trace.Wrap(err)
 +	}
 +	beams := filterBeams(botBeams, owned)
 +
 +	if s.delegation != "" {
 +		identityPath, cleanup, err := s.userIdentity(ctx)
 +		if err != nil {
-+			return "", trace.Wrap(err)
++			return nil, trace.Wrap(err)
 +		}
 +		defer cleanup()
 +		userOutput, err := s.tsh(ctx, identityPath, "beams", "ls", "--format=json")
 +		if err != nil {
-+			return "", trace.Wrap(err)
++			return nil, trace.Wrap(err)
 +		}
 +		userBeams, err := decodeBeams(userOutput)
 +		if err != nil {
-+			return "", trace.Wrap(err)
++			return nil, trace.Wrap(err)
 +		}
 +		beams = append(beams, userBeams...)
 +	}
++	return beams, nil
++}
 +
++func (s beamsSession) list(ctx context.Context) (string, error) {
++	beams, err := s.beams(ctx)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
 +	if len(beams) == 0 {
 +		return "No beams. Create one with `/beams add`.", nil
 +	}
@@ -460,34 +542,44 @@ index 00000000000..3dc26ae77d4
 +}
 +
 +func (s beamsSession) add(ctx context.Context, args []string) (string, error) {
-+	tshArgs := append([]string{"beams", "add", "--no-console", "--format=json"}, args...)
-+	if s.delegation != "" {
-+		identityPath, cleanup, err := s.userIdentity(ctx)
-+		if err != nil {
-+			return "", trace.Wrap(err)
-+		}
-+		defer cleanup()
-+		out, err := s.tsh(ctx, identityPath, tshArgs...)
-+		if err != nil {
-+			return "", trace.Wrap(err)
-+		}
-+		return truncateSlackOutput(out), nil
-+	}
-+
-+	out, err := s.tsh(ctx, s.runner.Config.PluginIdentity, tshArgs...)
++	out, _, err := s.createBeam(ctx, args)
 +	if err != nil {
 +		return "", trace.Wrap(err)
++	}
++	return truncateSlackOutput(out), nil
++}
++
++// createBeam creates a beam as the user's delegated identity when connected,
++// otherwise as the bot, recording it in the user's index. It returns the tsh
++// output and the new beam's name.
++func (s beamsSession) createBeam(ctx context.Context, args []string) (string, string, error) {
++	tshArgs := append([]string{"beams", "add", "--no-console", "--format=json"}, args...)
++	identityPath := s.runner.Config.PluginIdentity
++	if s.delegation != "" {
++		userPath, cleanup, err := s.userIdentity(ctx)
++		if err != nil {
++			return "", "", trace.Wrap(err)
++		}
++		defer cleanup()
++		identityPath = userPath
++	}
++
++	out, err := s.tsh(ctx, identityPath, tshArgs...)
++	if err != nil {
++		return "", "", trace.Wrap(err)
 +	}
 +	var beam struct {
 +		ID string `json:"id"`
 +	}
 +	if err := json.Unmarshal([]byte(out), &beam); err != nil || beam.ID == "" {
-+		return "", trace.BadParameter("beam was created but its name could not be read from tsh output; it is not visible in Slack")
++		return "", "", trace.BadParameter("beam was created but its name could not be read from tsh output")
 +	}
-+	if err := s.updateIndex(func(owned map[string]bool) { owned[beam.ID] = true }); err != nil {
-+		return "", trace.Wrap(err)
++	if s.delegation == "" {
++		if err := s.updateIndex(func(owned map[string]bool) { owned[beam.ID] = true }); err != nil {
++			return "", "", trace.Wrap(err)
++		}
 +	}
-+	return truncateSlackOutput(out), nil
++	return out, beam.ID, nil
 +}
 +
 +// target runs a command that acts on named beams. Bot-owned beams are allowed
@@ -868,10 +960,10 @@ index 00000000000..3dc26ae77d4
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..95f13f600ad
+index 00000000000..eb91ee01714
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,169 @@
 +package slack
 +
 +import (
@@ -981,6 +1073,8 @@ index 00000000000..95f13f600ad
 +case "$3 $4" in
 +"beams ls") echo '[{"id":"mine","owner":"access-plugin"},{"id":"theirs","owner":"access-plugin"}]' ;;
 +"beams add") echo '{"id":"mine","owner":"access-plugin"}' ;;
++"beams exec") printf 'Built the page.\nSCOTTY_ACTION: publish\n' ;;
++"beams publish") echo '{"id":"mine","url":"https://mine.example"}' ;;
 +*) echo ok ;;
 +esac
 +`
@@ -1039,8 +1133,309 @@ index 00000000000..95f13f600ad
 +	require.Contains(t, string(calls), "--identity=/plugin-identity beams exec mine uname -a")
 +	require.Contains(t, string(calls), `beams exec mine 'claude' '-p' '--dangerously-skip-permissions' '--continue' 'what'\''s failing?'`)
 +}
+diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
+new file mode 100644
+index 00000000000..023e1e22ee6
+--- /dev/null
++++ b/integrations/access/slack/beams_scotty.go
+@@ -0,0 +1,197 @@
++package slack
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++
++	"github.com/gravitational/trace"
++)
++
++// scottyActionPrefix marks lines in Claude's reply that ask the plugin to act
++// on the beam from outside, which Claude cannot do from inside the VM.
++const scottyActionPrefix = "SCOTTY_ACTION:"
++
++var (
++	slackMention  = regexp.MustCompile(`<@[A-Z0-9]+>`)
++	scottyPrefix  = regexp.MustCompile(`(?i)^\s*scotty\b[\s,:]*`)
++	safeThreadKey = regexp.MustCompile(`^[A-Z0-9]+-[0-9.]+$`)
++)
++
++// scottyRequest extracts the request from a Slack message addressed to the
++// bot. Mentions and direct messages always count; other channel messages
++// count only when they start with "scotty".
++func scottyRequest(event BeamsMessageEvent) (string, bool) {
++	if event.User == "" || event.BotID != "" || event.Subtype != "" {
++		return "", false
++	}
++	text := strings.TrimSpace(slackMention.ReplaceAllString(event.Text, ""))
++	switch {
++	case event.EventType == "app_mention", event.ChannelType == "im":
++		text = scottyPrefix.ReplaceAllString(text, "")
++	case scottyPrefix.MatchString(event.Text):
++		text = scottyPrefix.ReplaceAllString(event.Text, "")
++	default:
++		return "", false
++	}
++	text = strings.TrimSpace(text)
++	return text, text != ""
++}
++
++// Ask handles a natural-language request. It picks one of the user's beams
++// (or creates one), hands the request to Claude Code there, and carries out
++// the actions Claude asks for. Requests in the same Slack thread continue the
++// same beam and Claude conversation.
++func (r BeamsCommandRunner) Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error) {
++	if !safeThreadKey.MatchString(threadKey) {
++		return "", trace.BadParameter("invalid Slack thread")
++	}
++	s, err := r.newSession(ctx, teamID, userID)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++
++	beams, err := s.beams(ctx)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	threadPath := filepath.Join(s.profileDir, "threads", threadKey)
++	previous, _ := os.ReadFile(threadPath)
++	name, continued := chooseBeam(beams, strings.TrimSpace(string(previous)), text)
++
++	var notes []string
++	created := false
++	if name == "" {
++		_, name, err = s.createBeam(ctx, nil)
++		if err != nil {
++			return "", trace.Wrap(err, "creating a beam")
++		}
++		created = true
++		notes = append(notes, fmt.Sprintf("Created beam `%s`.", name))
++	}
++	if err := os.MkdirAll(filepath.Dir(threadPath), 0o700); err != nil {
++		return "", trace.Wrap(err)
++	}
++	if err := os.WriteFile(threadPath, []byte(name), 0o600); err != nil {
++		return "", trace.Wrap(err)
++	}
++
++	claudeArgs := []string{name}
++	if continued {
++		claudeArgs = append(claudeArgs, "--continue")
++	}
++	claudeArgs = append(claudeArgs, scottyPrompt(name, s.username, created, text))
++	output, err := s.claude(ctx, claudeArgs)
++	if err != nil {
++		return "", trace.Wrap(err, "running Claude Code in beam %q", name)
++	}
++
++	reply, actions := parseScottyActions(output)
++	for _, action := range actions {
++		note, err := s.scottyAction(ctx, name, action)
++		if err != nil {
++			note = fmt.Sprintf("Could not %s: %s", action, trace.UserMessage(err))
++		}
++		notes = append(notes, note)
++	}
++
++	parts := append([]string{reply}, notes...)
++	parts = append(parts, fmt.Sprintf("_beam: `%s`_", name))
++	return truncateSlackOutput(strings.TrimSpace(strings.Join(parts, "\n\n"))), nil
++}
++
++// chooseBeam picks the beam for a request: the thread's beam, a beam named in
++// the request, or the user's newest beam. continued reports whether the
++// thread already has a Claude conversation in that beam.
++func chooseBeam(beams []map[string]any, threadBeam, text string) (name string, continued bool) {
++	var newest, newestExpiry string
++	for _, beam := range beams {
++		id, _ := beam["id"].(string)
++		if id == "" {
++			continue
++		}
++		if id == threadBeam {
++			return id, true
++		}
++		if strings.Contains(text, id) {
++			name = id
++		}
++		if expires, _ := beam["expires"].(string); newest == "" || expires > newestExpiry {
++			newest, newestExpiry = id, expires
++		}
++	}
++	if name != "" {
++		return name, false
++	}
++	return newest, false
++}
++
++func scottyPrompt(beam, username string, created bool, request string) string {
++	var b strings.Builder
++	fmt.Fprintf(&b, "You are Scotty, a Slack assistant working inside the Teleport Beam %q, an ephemeral Debian sandbox VM, on behalf of %s.", beam, username)
++	if created {
++		b.WriteString(" This beam was just created for this request.")
++	}
++	b.WriteString(`
++Carry out the request below in this VM. Your final reply is posted to Slack, so keep it short and use Slack formatting.
++To share a web page or service, serve it on port 8080 on 0.0.0.0 in the background so it keeps running after you exit (for example with nohup or tmux), then request publishing.
++You cannot manage beams yourself. To have the Slack bot act for you, end your reply with one line per action:
++` + scottyActionPrefix + ` publish
++` + scottyActionPrefix + ` unpublish
++` + scottyActionPrefix + ` create_beam
++Only request create_beam if the user explicitly asks for an additional beam.
++
++Request: `)
++	b.WriteString(request)
++	return b.String()
++}
++
++// parseScottyActions separates action lines from Claude's reply.
++func parseScottyActions(output string) (string, []string) {
++	var reply []string
++	var actions []string
++	for _, line := range strings.Split(output, "\n") {
++		if action, ok := strings.CutPrefix(strings.TrimSpace(line), scottyActionPrefix); ok {
++			if action = strings.TrimSpace(action); action != "" {
++				actions = append(actions, action)
++			}
++			continue
++		}
++		reply = append(reply, line)
++	}
++	return strings.TrimSpace(strings.Join(reply, "\n")), actions
++}
++
++func (s beamsSession) scottyAction(ctx context.Context, beam, action string) (string, error) {
++	switch action {
++	case "publish":
++		out, err := s.target(ctx, []string{"publish", beam, "--format=json"})
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		var published struct {
++			URL string `json:"url"`
++		}
++		if json.Unmarshal([]byte(out), &published) == nil && published.URL != "" {
++			return fmt.Sprintf("Published: %s", published.URL), nil
++		}
++		return fmt.Sprintf("Published `%s`.", beam), nil
++	case "unpublish":
++		if _, err := s.target(ctx, []string{"unpublish", beam}); err != nil {
++			return "", trace.Wrap(err)
++		}
++		return fmt.Sprintf("Unpublished `%s`.", beam), nil
++	case "create_beam":
++		_, name, err := s.createBeam(ctx, nil)
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		return fmt.Sprintf("Created beam `%s`.", name), nil
++	default:
++		return "", trace.BadParameter("unsupported action %q", action)
++	}
++}
+diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
+new file mode 100644
+index 00000000000..4a90aa392d9
+--- /dev/null
++++ b/integrations/access/slack/beams_scotty_test.go
+@@ -0,0 +1,92 @@
++package slack
++
++import (
++	"os"
++	"sync"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++func TestScottyRequest(t *testing.T) {
++	for _, tc := range []struct {
++		name  string
++		event BeamsMessageEvent
++		want  string
++	}{
++		{name: "mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT> create a beam"}, want: "create a beam"},
++		{name: "dm", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Text: "list my beams"}, want: "list my beams"},
++		{name: "channel prefix", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "Scotty, make a page"}, want: "make a page"},
++		{name: "channel chatter", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "lunch?"}},
++		{name: "scottyish word", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "scottys idea"}},
++		{name: "bot message", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", BotID: "B1", Text: "hi"}},
++		{name: "edit", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Subtype: "message_changed", Text: "hi"}},
++		{name: "empty mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT>"}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			got, ok := scottyRequest(tc.event)
++			require.Equal(t, tc.want != "", ok)
++			require.Equal(t, tc.want, got)
++		})
++	}
++}
++
++func TestParseScottyActions(t *testing.T) {
++	reply, actions := parseScottyActions("Done.\n  SCOTTY_ACTION: publish\nSee it soon.\nSCOTTY_ACTION:\n")
++	require.Equal(t, "Done.\nSee it soon.", reply)
++	require.Equal(t, []string{"publish"}, actions)
++}
++
++func TestChooseBeam(t *testing.T) {
++	beams := []map[string]any{
++		{"id": "old", "expires": "2026-10-02T01:00:00Z"},
++		{"id": "new", "expires": "2026-10-02T09:00:00Z"},
++	}
++	name, continued := chooseBeam(beams, "old", "anything")
++	require.Equal(t, "old", name)
++	require.True(t, continued)
++
++	name, continued = chooseBeam(beams, "gone", "do it in old please")
++	require.Equal(t, "old", name)
++	require.False(t, continued)
++
++	name, _ = chooseBeam(beams, "", "make a page")
++	require.Equal(t, "new", name)
++
++	name, _ = chooseBeam(nil, "", "make a page")
++	require.Empty(t, name)
++}
++
++func TestScottyAsk(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:        tshPath,
++			Proxy:          "example.teleport.sh:443",
++			PluginIdentity: "/plugin-identity",
++			ProfilesDir:    t.TempDir(),
++			Users:          map[string]string{"UALICE": "alice@example.com"},
++		},
++		IndexMu: &sync.Mutex{},
++	}
++	ctx := t.Context()
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.000100", "make a webpage about Seattle and publish it")
++	require.NoError(t, err)
++	require.Contains(t, out, "Built the page.")
++	require.Contains(t, out, "Created beam `mine`.")
++	require.Contains(t, out, "Published: https://mine.example")
++	require.NotContains(t, out, "SCOTTY_ACTION")
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.000100", "make the title bigger")
++	require.NoError(t, err)
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), "beams add --no-console --format=json")
++	require.Contains(t, string(calls), "beams publish mine --format=json")
++	require.Contains(t, string(calls), "'--continue' 'You are Scotty")
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", "../escape", "hi")
++	require.Error(t, err)
++}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
-index d0abf811e9a..14dd9e2c677 100644
+index d0abf811e9a..b48a4703dd4 100644
 --- a/integrations/access/slack/bot.go
 +++ b/integrations/access/slack/bot.go
 @@ -19,11 +19,15 @@
@@ -1077,7 +1472,7 @@ index d0abf811e9a..14dd9e2c677 100644
  	return apps
  }
  
-@@ -235,6 +243,42 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
+@@ -235,6 +243,51 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
  	return trace.Wrap(err)
  }
  
@@ -1115,6 +1510,15 @@ index d0abf811e9a..14dd9e2c677 100644
 +		return trace.Errorf("Slack response URL returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
 +	}
 +	return nil
++}
++
++// PostBeamsThreadReply posts a message in a Slack thread.
++func (b Bot) PostBeamsThreadReply(ctx context.Context, channelID, threadTS, text string) error {
++	_, err := b.client.NewRequest().
++		SetContext(ctx).
++		SetBody(Message{BaseMessage: BaseMessage{Channel: channelID, ThreadTs: threadTS}, Text: text}).
++		Post("chat.postMessage")
++	return trace.Wrap(err)
 +}
 +
  // lookupDirectChannelByEmail fetches user's id by email.
@@ -1292,19 +1696,35 @@ index 00000000000..bf8a541c4c2
 +volumes:
 +  beams-profiles:
 diff --git a/integrations/access/slack/socketmode.go b/integrations/access/slack/socketmode.go
-index 831a3ddb02b..046a16e426b 100644
+index 831a3ddb02b..fbb793078a2 100644
 --- a/integrations/access/slack/socketmode.go
 +++ b/integrations/access/slack/socketmode.go
-@@ -293,7 +293,7 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
+@@ -293,7 +293,23 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
  
  				// Socket Mode server wants to rebuild WebSocket connection.
  				return trace.Wrap(ErrSocketModeDisconnect)
 -			case SocketModeEventTypeInteractive:
++			case SocketModeEventTypeEventsAPI:
++				select {
++				case ackCh <- e.EnvelopeID:
++				case <-ctx.Done():
++					return ctx.Err()
++				}
++				event, err := UnmarshalBeamsMessageEvent(e.Payload)
++				if err != nil {
++					log.WarnContext(ctx, "Failed to decode Events API payload, skipping...", "error", err)
++					continue
++				}
++				select {
++				case smc.interactionsCh <- event:
++				case <-ctx.Done():
++					return ctx.Err()
++				}
 +			case SocketModeEventTypeInteractive, SocketModeEventTypeSlashCommands:
  				log.DebugContext(ctx, "Received interaction event")
  
  				// Send an ack to the write goroutine immediately.
-@@ -304,10 +304,21 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
+@@ -304,10 +320,21 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
  					return ctx.Err()
  				}
  
@@ -1368,18 +1788,19 @@ index 60e14372f32..272b546b498 100644
  			name:    "malformed payload; skip",
  			payload: malformedPayload,
 diff --git a/integrations/access/slack/types.go b/integrations/access/slack/types.go
-index cfac4452c25..cc9c4343c7c 100644
+index cfac4452c25..bb388483725 100644
 --- a/integrations/access/slack/types.go
 +++ b/integrations/access/slack/types.go
-@@ -30,6 +30,7 @@ const (
+@@ -30,6 +30,8 @@ const (
  	SocketModeEventTypeHello          = "hello"
  	SocketModeEventTypeDisconnect     = "disconnect"
  	SocketModeEventTypeInteractive    = "interactive"
 +	SocketModeEventTypeSlashCommands  = "slash_commands"
++	SocketModeEventTypeEventsAPI      = "events_api"
  	SocketModeEventReasonLinkDisabled = "link_disabled"
  )
  
-@@ -146,6 +147,10 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
+@@ -146,6 +148,10 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
  		var val BlockActionsEvent
  		err = trace.Wrap(json.Unmarshal(data, &val))
  		interaction = val
@@ -1390,10 +1811,63 @@ index cfac4452c25..cc9c4343c7c 100644
  	default:
  		err = trace.BadParameter("unsupported interaction event type %q", interactionType.Type)
  	}
-@@ -156,6 +161,25 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
+@@ -156,6 +162,78 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
  	return interaction, nil
  }
  
++// BeamsMessageEvent is an app_mention or message event delivered through the
++// Slack Events API over Socket Mode.
++type BeamsMessageEvent struct {
++	TeamID      string
++	EventType   string
++	User        string
++	BotID       string
++	Subtype     string
++	Text        string
++	Channel     string
++	ChannelType string
++	TS          string
++	ThreadTS    string
++}
++
++func (BeamsMessageEvent) Type() InteractionEventType {
++	return SocketModeEventTypeEventsAPI
++}
++
++// UnmarshalBeamsMessageEvent decodes an events_api payload.
++func UnmarshalBeamsMessageEvent(data []byte) (BeamsMessageEvent, error) {
++	var payload struct {
++		TeamID string `json:"team_id"`
++		Event  struct {
++			Type        string `json:"type"`
++			User        string `json:"user"`
++			BotID       string `json:"bot_id"`
++			Subtype     string `json:"subtype"`
++			Text        string `json:"text"`
++			Channel     string `json:"channel"`
++			ChannelType string `json:"channel_type"`
++			TS          string `json:"ts"`
++			ThreadTS    string `json:"thread_ts"`
++		} `json:"event"`
++	}
++	if err := json.Unmarshal(data, &payload); err != nil {
++		return BeamsMessageEvent{}, trace.Wrap(err)
++	}
++	e := payload.Event
++	return BeamsMessageEvent{
++		TeamID:      payload.TeamID,
++		EventType:   e.Type,
++		User:        e.User,
++		BotID:       e.BotID,
++		Subtype:     e.Subtype,
++		Text:        e.Text,
++		Channel:     e.Channel,
++		ChannelType: e.ChannelType,
++		TS:          e.TS,
++		ThreadTS:    e.ThreadTS,
++	}, nil
++}
++
 +// SlashCommandEvent is delivered by Slack Socket Mode for a slash command.
 +type SlashCommandEvent struct {
 +	PayloadType string `json:"type"`
