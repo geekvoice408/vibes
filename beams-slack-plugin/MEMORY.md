@@ -14,14 +14,14 @@ Working end to end on the live deployment:
   `unpublish`, `rm`, `scp`, `status`, `connect`, `disconnect`)
 - Slack users authorized by matching their Slack email to a Teleport user that
   has `beam-user`
-- Per-user isolation of bot-owned beams in Slack
+- Every beam action runs as the user through a delegation session; the plugin
+  asks for one (with the exact `tsh` command) when missing or expired
 - Scotty (mentions, DMs, `scotty ...`, thread follow-ups) running Claude Code
   inside beams
 - `tbot` sidecar keeping the plugin identity renewed
 
-Open problem: beams created without `/beams connect` are owned by
-`bot-scotty`, so their owner cannot open the published URL. See
-"Open items".
+Users own every beam created from Slack, so published URLs open for them.
+The plugin never acts on beams as its own bot identity.
 
 ## Repositories
 
@@ -67,19 +67,24 @@ has never signed in is denied until they do.
 
 ### Identities and ownership
 
-Chosen per Slack user on every command:
+Every beam action (`ls`, `add`, `exec`, `claude`, `publish`, `unpublish`,
+`rm`, `scp`, and all of Scotty) runs as the user:
 
-- **Not connected (default):** `tsh` runs with `plugin_identity`, the `tbot`
-  output for `bot-scotty`. Teleport records `bot-scotty` as owner. The plugin
-  records which beams each Slack user created in
-  `<profiles_dir>/<team>/<user>/bot-beams`. `ls` shows only those (and prunes
-  expired ones), and `exec`/`claude`/`publish`/`unpublish`/`rm`/`scp` refuse
-  other names with "you have no beam named ...".
-- **Connected (`delegation-session` file present):** the plugin calls
-  delegation `GenerateCerts` with its bot identity to mint a short-lived
-  certificate for the user into a temp file for each command. New beams are
-  owned by the user. Beams in the user's `bot-beams` index still run as the
-  bot.
+- `userIdentity` calls delegation `GenerateCerts` with the bot's `tbot`
+  identity to mint a short-lived certificate for the user (CN checked against
+  the resolved username) into a `0600` temp file, used for one `tsh` call.
+- No session, or minting fails with AccessDenied/NotFound, returns
+  `needsAuthorizationError`. `/beams` replies with `authorizationMessage`
+  ("Before we can get started, you need to allow me to create beams as
+  you..." plus `tsh delegation create-session --bot=<bot_name> ...`) and
+  removes an expired session file. Nothing runs as the bot.
+- Teleport enforces ownership (`beam_labels` owner == user), so users only
+  see and reach their own beams.
+
+An earlier version ran unconnected users as the bot with a per-user
+`bot-beams` index; it was removed because bot-owned beams' published URLs are
+unreachable for the human (see the app-label fact below). Stale `bot-beams`
+files in profiles are ignored.
 
 Teleport v18.11.1 facts behind this design, confirmed in source:
 
@@ -113,15 +118,24 @@ Teleport v18.11.1 facts behind this design, confirmed in source:
    in a thread the same user already has with Scotty (`FollowsThread`
    checks `<profile>/threads/<channel>-<thread_ts>`). Bot messages, edits,
    and other subtypes are ignored.
-2. `Ask` picks the beam: the thread's beam (then `claude --continue`), a beam
-   named in the text, or the newest by expiry. If there are none it creates
+2. `Ask` requires delegation. If the user is not connected, it saves the
+   request to `<profile>/threads/<key>.pending`, creates an empty thread file
+   so the reply is a follow-up, and returns the "Before we can get started"
+   message with `tsh delegation create-session`. A later message in the
+   thread containing a UUID connects (same validation as `/beams connect`)
+   and replays the pending request. If minting fails with AccessDenied or
+   NotFound, the session file is removed and the user is asked again.
+3. `Ask` picks one of the user's beams: the thread's beam (then
+   `claude --continue`), a beam named in the text, or the newest by expiry. If there are none it creates
    one, and the prompt tells Claude the beam is new.
-3. It runs `claude -p --dangerously-skip-permissions <prompt>` through
+4. It runs `claude -p --dangerously-skip-permissions <prompt>` through
    `tsh beams exec` as one shell-quoted string, with `claude_timeout` (15m).
-4. Claude ends its reply with `SCOTTY_ACTION: publish|unpublish|create_beam`
+5. Claude ends its reply with `SCOTTY_ACTION: publish|unpublish|create_beam`
    lines. The plugin strips those, runs the actions, and appends the results
-   (for example the publish URL).
-5. Inside a beam, Claude has preconfigured Anthropic/OpenAI credentials and
+   (for example the publish URL). `create_beam` switches the thread to the
+   new beam; the thread file is marked `<beam> new` until a Claude run
+   succeeds there, so the next run does not pass `--continue`.
+6. Inside a beam, Claude has preconfigured Anthropic/OpenAI credentials and
    its own `tsh`. The beam's `~/AGENTS.md` says it can run
    `tsh beams publish $BEAM_ALIAS` itself. `SCOTTY_ACTION` remains as the
    path the plugin controls.
@@ -130,9 +144,9 @@ Teleport v18.11.1 facts behind this design, confirmed in source:
 
 ```text
 /var/lib/teleport-slack/beams/<slack-team-id>/<slack-user-id>/
-  bot-beams            beams this user created through the bot
   delegation-session   delegation session ID after /beams connect
-  threads/<ch>-<ts>    beam used by each Scotty thread
+  threads/<ch>-<ts>    beam used by each Scotty thread ("<beam> new" = no Claude conversation yet)
+  threads/<ch>-<ts>.pending  request waiting for the user to authorize Scotty
   identity-*           temp delegated identities, deleted after each command
 ```
 
@@ -173,9 +187,12 @@ Test identities: Slack workspace `T03PXFLJF`, user `U049LDB6K` mapped to
    with "MFA response of type <nil> is not supported for headless
    authentication". Headless approval needs WebAuthn or SSO MFA, and the
    account only has Google SSO, so this was removed.
-5. **Bot identity with per-user isolation** is the current default. It needs
-   no setup, but Teleport ownership is `bot-scotty`.
-6. **Opt-in delegation** (`/beams connect`) on top for real ownership.
+5. **Bot identity with per-user isolation** needed no setup, but beams were
+   owned by `bot-scotty`, so users could not open their published URLs.
+   Removed.
+6. **Delegation required everywhere** (current). The plugin prompts with the
+   `tsh` command; Scotty accepts the session ID pasted in its thread and
+   resumes the original request.
 7. **A `tbot` sidecar** replaced the hand-signed `access-plugin` identity,
    which did not renew and could not use delegation.
 
@@ -187,20 +204,13 @@ was expected, broken line continuations).
 
 ## Open items
 
-1. **Published URLs for bot-owned beams.** The owner cannot open them. Options
-   discussed, not yet chosen:
-   - Make `/beams connect` easier. Scotty would prompt in-thread with the
-     `tsh delegation create-session` command, accept the session ID pasted in
-     the thread, and prompt again when the session expires.
-   - Add a role granting `app_labels: teleport.internal/beams/owner:
-     bot-scotty`. This works immediately, but every holder can open every
-     bot-published app.
-   - Both: the role as a fallback, delegation for real ownership.
-2. Test `/beams connect` end to end with `scotty` and confirm new beams show
-   the user as owner and that the URL opens.
-3. Test `scp` and `unpublish` from Slack.
-4. Confirm Teleport audit events attribute delegated actions to both the human
+1. Test the authorization flow end to end with `scotty` and confirm new beams
+   show the user as owner and that the published URL opens.
+2. Test `scp` and `unpublish` from Slack.
+3. Confirm Teleport audit events attribute delegated actions to both the human
    and `bot-scotty`.
+4. The bot may no longer need `beam-user`, since beam actions run as users.
+   Verify, then drop it from `scotty`.
 5. Security clean-up: rotate the GitHub token that was pasted into an earlier
    Codex conversation. Rotate the Slack tokens if they were ever shared. Delete
    the old `secrets/plugin-identity`. Remove `beam-user` from the
@@ -214,9 +224,9 @@ was expected, broken line continuations).
   per command into `0600` temp files and deleted afterwards.
 - Delegated certificate usernames are checked against the resolved Teleport
   user.
-- In bot mode, the plugin's Slack checks (email-to-role match plus the
-  `bot-beams` index) are the only thing keeping one user away from another's
-  beams. Teleport sees every unconnected user as `bot-scotty`.
+- Each Slack user's actions run as their own Teleport user, so Teleport RBAC
+  and the audit log apply per person. The Slack email-to-Teleport-user match
+  is what decides whose delegation session a Slack user can use.
 - Claude runs in beams with `--dangerously-skip-permissions`. That is
   acceptable because beams are throwaway sandbox VMs, but anything a beam can
   reach is reachable by whoever controls the prompt.

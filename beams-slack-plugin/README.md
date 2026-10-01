@@ -19,8 +19,10 @@ and needs no inbound ports or public URL.
 - **Who you are**: the plugin looks up your Slack email, finds the Teleport
   user with that username, and lets you in only if that user has the
   configured role (`beam-user`). No list of Slack IDs to maintain.
-- **Privacy between users**: each person only sees and acts on their own
-  beams, even when they share the bot's identity.
+- **Acts as you**: every beam action runs as your own Teleport user, so you
+  own your beams, can open their published URLs, and only see your own. You
+  authorize this once (up to 7 days) with a `tsh` command the plugin gives
+  you.
 
 ## Slash commands
 
@@ -47,6 +49,8 @@ and needs no inbound ports or public URL.
 - Interactive `/beams ssh` is not supported; use `exec`.
 - A brand-new beam takes a moment to accept SSH; commands retry for up to 3
   minutes.
+- Until you connect, every beam command replies with the authorization
+  instructions instead of running.
 
 ## Scotty
 
@@ -57,10 +61,21 @@ Talk to Scotty in any of these ways:
 - a channel message starting with `scotty` (needs the `message.channels` event)
 - a reply in a thread Scotty is already working in (no mention needed)
 
+The first time (and again when your authorization expires), Scotty replies:
+
+> Before we can get started, you need to allow me to create beams as you. Run
+> this in a terminal where you're signed in to Teleport: `tsh delegation
+> create-session ...` Then reply here with the session ID it prints and I'll
+> pick up your request.
+
+Paste the session ID (or the whole command output) into the thread. Scotty
+connects you and then carries out the request you made. This is the same
+connection `/beams connect` makes, and it lasts up to 7 days.
+
 For each request Scotty:
 
-1. Picks the beam: the one this thread already uses, a beam you named, or your
-   newest beam. If you have none, it creates one.
+1. Picks one of your own beams: the one this thread already uses, a beam you
+   named, or your newest. If you have none, it creates one, owned by you.
 2. Runs Claude Code in that beam with your request. Claude is told to serve
    anything it wants to share on port 8080 in the background.
 3. Carries out actions Claude asks for (`publish`, `unpublish`,
@@ -70,62 +85,40 @@ For each request Scotty:
 
 Scotty cannot delete beams; use `/beams rm`.
 
-## Who owns a beam
+## Authorizing the plugin to act as you
 
-Teleport records the identity that created a beam as its owner, and that owner
-decides who can open the beam's published URL.
+Teleport v18 does not let a bot impersonate an SSO user, and only you can
+create a delegation session for yourself (with MFA). So the first time you use
+`/beams` or Scotty, and again when your authorization expires, the plugin
+replies:
 
-| How you use it | Beam owner in Teleport | Can you open the published URL? |
-| --- | --- | --- |
-| Default (not connected) | `bot-scotty` | Only with extra RBAC (see below) |
-| After `/beams connect` | your Teleport user | Yes |
+> Before we can get started, you need to allow me to create beams as you. Run
+> this in a terminal where you're signed in to Teleport:
+>
+> `tsh delegation create-session --proxy=super-grass.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h`
 
-**Connecting (recommended).** Run `/beams connect`. The plugin replies with a
-command like:
+Run it, then hand back the session ID it prints:
 
-```sh
-tsh delegation create-session --proxy=super-grass.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h
-```
+- with Scotty: reply in the thread (no mention needed); Scotty then carries
+  out the request you made
+- with slash commands: `/beams connect <session-id>`
 
-Run it in a terminal where you are logged in with `tsh`, then run
-`/beams connect <id>` with the ID it prints. For the next 7 days, beams you
-create from Slack or Scotty are owned by you. `/beams disconnect` switches back
-to the shared bot. Beams you created through the bot before connecting stay
-reachable.
+For the next 7 days every beam action runs as your Teleport user: beams are
+owned by you, published URLs open for you, and Teleport keeps your beams
+separate from everyone else's. `/beams disconnect` forgets the session.
 
-Why there is a manual step: Teleport v18 does not let a bot impersonate an SSO
-user, and only the user can create a delegation session for themselves (with
-MFA). There is no API for the bot to do it on your behalf.
-
-**Without connecting.** Beams are owned by `bot-scotty`. Slack still keeps
-them private to you, but the `beam-user` role only grants access to apps owned
-by your own user, so you cannot open the published URL. A cluster admin can
-allow it with a role such as:
-
-```yaml
-kind: role
-version: v8
-metadata:
-  name: beams-slack-apps
-spec:
-  allow:
-    app_labels:
-      teleport.internal/beams/owner: bot-scotty
-```
-
-Anyone with that role can open every app Scotty published while not
-connected, not just their own.
+The plugin never creates or touches beams as its own bot identity.
 
 ## Setup
 
 ### 1. Teleport
 
-The plugin runs as a Machine ID bot (named `scotty` here) with two roles:
-
-- `access-plugin`: the role Teleport's Slack plugin normally uses. It must
-  also allow `read` and `list` on `user` and `user_login_state` so the plugin
-  can match Slack emails to Teleport users.
-- `beam-user`: lets the bot create and use beams.
+The plugin runs as a Machine ID bot (named `scotty` here). Its role needs
+`read` and `list` on `user` and `user_login_state` so it can match Slack
+emails to Teleport users. The deployment uses `access-plugin` (the role
+Teleport's Slack plugin normally uses, extended with those rules) plus
+`beam-user`. Beam actions themselves run as each user through delegation, so
+the bot does not strictly need `beam-user` any more.
 
 ```sh
 tctl bots add scotty --roles=access-plugin,beam-user    # or: tctl bots update scotty --set-roles=...
@@ -200,8 +193,8 @@ Start from `config.toml.example`. The Beams settings:
 | `profiles_dir` | temp dir | Per-user state; use the `beams-profiles` volume |
 | `required_role` | none | Teleport role a Slack user's matching Teleport user must have |
 | `users` | none | Optional `"<slack-user-id>" = "<teleport-user>"` overrides that skip the role check |
-| `bot_name` | none | Bot named in delegation sessions (`scotty`); needed for `/beams connect` |
-| `delegation_ttl` | `168h` | Session length suggested by `/beams connect` (Teleport max 7 days) |
+| `bot_name` | none | Bot named in delegation sessions (`scotty`); required to use Beams |
+| `delegation_ttl` | `168h` | Session length in the suggested `tsh` command (Teleport max 7 days) |
 | `identity_ttl` | `15m` | Lifetime of per-command delegated certificates (max 1h) |
 | `command_timeout` | `2m` | Limit for normal commands |
 | `claude_timeout` | `15m` | Limit for `/beams claude` and Scotty |
@@ -236,7 +229,7 @@ Main files under `integrations/access/slack/`:
 | File | Purpose |
 | --- | --- |
 | `beams_app.go` | Socket Mode loop, slash-command and Scotty message handlers |
-| `beams_commands.go` | `/beams` commands, user lookup, per-user isolation, delegation, `tsh` runner |
+| `beams_commands.go` | `/beams` commands, user lookup, delegation and authorization prompts, `tsh` runner |
 | `beams_scotty.go` | Scotty request parsing, beam choice, Claude prompt, actions |
 | `socketmode.go`, `types.go` | Slash-command and Events API envelope decoding |
 | `bot.go` | Slack replies (`response_url` and threaded `chat.postMessage`) |
