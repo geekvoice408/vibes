@@ -76,6 +76,155 @@ index b61b5fe458..5bd367d08f 100644
 +
  If you have a self-hosted Teleport deployment, you can find information for
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
+diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
+new file mode 100644
+index 0000000000..480ea0232f
+--- /dev/null
++++ b/integrations/access/slack/beams_app.go
+@@ -0,0 +1,143 @@
++/*
++ * Teleport
++ * Copyright (C) 2026  Gravitational, Inc.
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU Affero General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ */
++
++package slack
++
++import (
++	"context"
++	"fmt"
++	"strings"
++
++	"github.com/gravitational/trace"
++
++	"github.com/gravitational/teleport/integrations/access/common"
++	"github.com/gravitational/teleport/integrations/lib"
++	"github.com/gravitational/teleport/integrations/lib/logger"
++)
++
++// BeamsBot defines the Slack operations used by the Beams slash-command app.
++type BeamsBot interface {
++	GenerateWebSocketURL(ctx context.Context) (string, error)
++	PostBeamsReply(ctx context.Context, channelID, userID, text string) error
++}
++
++type beamsRunner interface {
++	Run(ctx context.Context, teamID, userID, text string) (string, error)
++}
++
++// BeamsApp consumes /beams commands from Slack Socket Mode.
++type BeamsApp struct {
++	conf             BeamsConfig
++	bot              BeamsBot
++	runner           beamsRunner
++	socketModeClient *SocketModeClient
++	job              lib.ServiceJob
++}
++
++// NewBeamsApp creates a Beams slash-command application.
++func NewBeamsApp(conf BeamsConfig) *BeamsApp {
++	app := &BeamsApp{
++		conf:   conf,
++		runner: BeamsCommandRunner{Config: conf},
++	}
++	app.job = lib.NewServiceJob(app.run)
++	return app
++}
++
++// Init initializes the Slack bot and Socket Mode client.
++func (a *BeamsApp) Init(baseApp *common.BaseApp) error {
++	var ok bool
++	a.bot, ok = baseApp.Bot.(BeamsBot)
++	if !ok {
++		return trace.BadParameter("bot does not support Beams slash commands")
++	}
++	a.socketModeClient = NewSocketModeClient(a.bot)
++	return nil
++}
++
++// Start starts the application.
++func (a *BeamsApp) Start(process *lib.Process) {
++	process.SpawnCriticalJob(a.job)
++}
++
++// WaitReady waits until the application is ready.
++func (a *BeamsApp) WaitReady(ctx context.Context) (bool, error) {
++	return a.job.WaitReady(ctx)
++}
++
++// WaitForDone waits for the application to stop.
++func (a *BeamsApp) WaitForDone() {
++	<-a.job.Done()
++}
++
++// Err returns the application error.
++func (a *BeamsApp) Err() error {
++	return a.job.Err()
++}
++
++func (a *BeamsApp) run(ctx context.Context) error {
++	process := lib.MustGetProcess(ctx)
++	ctx, cancel := context.WithCancel(ctx)
++	process.OnTerminate(func(context.Context) error {
++		cancel()
++		return nil
++	})
++
++	log := logger.Get(ctx)
++	a.job.SetReady(true)
++	log.InfoContext(ctx, "Beams slash-command app is running")
++
++	go func() {
++		for {
++			select {
++			case interaction := <-a.socketModeClient.Interactions():
++				event, ok := interaction.(SlashCommandEvent)
++				if !ok {
++					continue
++				}
++				if event.Command != "/beams" {
++					continue
++				}
++				go a.handleSlashCommand(ctx, event)
++			case <-ctx.Done():
++				return
++			}
++		}
++	}()
++
++	return trace.Wrap(a.socketModeClient.Run(ctx))
++}
++
++func (a *BeamsApp) handleSlashCommand(ctx context.Context, event SlashCommandEvent) {
++	log := logger.Get(ctx).With(
++		"slack_team_id", event.TeamID,
++		"slack_user_id", event.UserID,
++		"slack_channel_id", event.ChannelID,
++	)
++	log.InfoContext(ctx, "Executing Beams slash command")
++
++	output, err := a.runner.Run(ctx, event.TeamID, event.UserID, event.Text)
++	if err != nil {
++		output = fmt.Sprintf("Beams command failed: %s", trace.UserMessage(err))
++		log.WarnContext(ctx, "Beams slash command failed", "error", err)
++	}
++
++	if err := a.bot.PostBeamsReply(ctx, event.ChannelID, event.UserID, formatBeamsReply(output)); err != nil {
++		log.ErrorContext(ctx, "Failed to post Beams command response", "error", err)
++	}
++}
++
++func formatBeamsReply(output string) string {
++	output = strings.TrimSpace(output)
++	if strings.HasPrefix(output, "/beams ") || !strings.Contains(output, "\n") {
++		return output
++	}
++	return "```" + output + "```"
++}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
 index 0000000000..e777f29adb
@@ -192,6 +341,45 @@ index 0000000000..e777f29adb
 +	}
 +	return s
 +}
+diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
+index d0abf811e9..51b1450d55 100644
+--- a/integrations/access/slack/bot.go
++++ b/integrations/access/slack/bot.go
+@@ -62,6 +62,7 @@ type Bot struct {
+ 	webProxyURL *url.URL
+ 	// reviewConfig is the configuration for native review.
+ 	reviewConfig ReviewConfig
++	beamsConfig  BeamsConfig
+ 	clock        clockwork.Clock
+ }
+ 
+@@ -110,6 +111,9 @@ func (b Bot) SupportedApps() []common.App {
+ 	if b.reviewConfig.Enabled {
+ 		apps = append(apps, NewReviewApp(b.reviewConfig))
+ 	}
++	if b.beamsConfig.Enabled {
++		apps = append(apps, NewBeamsApp(b.beamsConfig))
++	}
+ 	return apps
+ }
+ 
+@@ -235,6 +239,16 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
+ 	return trace.Wrap(err)
+ }
+ 
++// PostBeamsReply posts a private slash-command response visible only to the
++// Slack user who invoked the command.
++func (b Bot) PostBeamsReply(ctx context.Context, channelID, userID, text string) error {
++	_, err := b.client.NewRequest().
++		SetContext(ctx).
++		SetBody(Message{BaseMessage: BaseMessage{Channel: channelID, User: userID}, Text: text}).
++		Post("chat.postEphemeral")
++	return trace.Wrap(err)
++}
++
+ // lookupDirectChannelByEmail fetches user's id by email.
+ func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
+ 	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
 index a8ecf146bf..80adb88661 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
@@ -220,7 +408,7 @@ index a8ecf146bf..80adb88661 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c1..dacb1d1f97 100644
+index e27fd004c1..0718d9d4c3 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -281,6 +469,14 @@ index e27fd004c1..dacb1d1f97 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
+@@ -201,6 +232,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+ 		clusterName:  clusterName,
+ 		webProxyURL:  webProxyURL,
+ 		reviewConfig: c.Review,
++		beamsConfig:  c.Beams,
+ 		clock:        c.Clock,
+ 	}, nil
+ }
 diff --git a/integrations/access/slack/docker-compose.beams.yml b/integrations/access/slack/docker-compose.beams.yml
 new file mode 100644
 index 0000000000..9830308ab7
@@ -357,7 +553,7 @@ index 60e14372f3..e577d4b406 100644
  			name:    "malformed payload; skip",
  			payload: malformedPayload,
 diff --git a/integrations/access/slack/types.go b/integrations/access/slack/types.go
-index cdb88fc592..201f0443b9 100644
+index cfac4452c2..cc9c4343c7 100644
 --- a/integrations/access/slack/types.go
 +++ b/integrations/access/slack/types.go
 @@ -30,6 +30,7 @@ const (

@@ -17,12 +17,12 @@ Implemented:
 - Rejection of interactive `ssh`
 - Command timeouts and Slack-safe output limits
 - Container and Compose scaffolding
+- Beams application registration in the plugin lifecycle
+- Slash-command dispatch to the command runner
+- Private asynchronous command results through Slack
 
 Still required before an end-to-end Slack test:
 
-- Register the Beams application in the plugin lifecycle
-- Dispatch slash events to the command runner
-- Post asynchronous results to Slack
 - Implement per-user Teleport SSO initiation and callback completion
 - Add command-runner and authentication tests
 
