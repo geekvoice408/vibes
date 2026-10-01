@@ -502,7 +502,7 @@ index 0000000000..9830308ab7
 +volumes:
 +  beams-profiles:
 diff --git a/integrations/access/slack/socketmode.go b/integrations/access/slack/socketmode.go
-index 831a3ddb02..78f4a422e9 100644
+index 831a3ddb02..046a16e426 100644
 --- a/integrations/access/slack/socketmode.go
 +++ b/integrations/access/slack/socketmode.go
 @@ -293,7 +293,7 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
@@ -514,11 +514,37 @@ index 831a3ddb02..78f4a422e9 100644
  				log.DebugContext(ctx, "Received interaction event")
  
  				// Send an ack to the write goroutine immediately.
+@@ -304,10 +304,21 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
+ 					return ctx.Err()
+ 				}
+ 
+-				interaction, err := UnmarshalInteractionEvent(e.Payload)
+-				if err != nil {
+-					log.WarnContext(ctx, "Unsupported interaction event, skipping...", "error", err)
+-					continue
++				var interaction InteractionEvent
++				if e.Type == SocketModeEventTypeSlashCommands {
++					var slashCommand SlashCommandEvent
++					if err := json.Unmarshal(e.Payload, &slashCommand); err != nil {
++						log.WarnContext(ctx, "Failed to decode slash command, skipping...", "error", err)
++						continue
++					}
++					interaction = slashCommand
++				} else {
++					var err error
++					interaction, err = UnmarshalInteractionEvent(e.Payload)
++					if err != nil {
++						log.WarnContext(ctx, "Unsupported interaction event, skipping...", "error", err)
++						continue
++					}
+ 				}
+ 
+ 				// Send to consumer app to handle interactions downstream.
 diff --git a/integrations/access/slack/socketmode_test.go b/integrations/access/slack/socketmode_test.go
-index 60e14372f3..e577d4b406 100644
+index 60e14372f3..272b546b49 100644
 --- a/integrations/access/slack/socketmode_test.go
 +++ b/integrations/access/slack/socketmode_test.go
-@@ -53,6 +53,20 @@ var nonBlockActionsPayload = `{
+@@ -53,6 +53,19 @@ var nonBlockActionsPayload = `{
  	}
  }`
  
@@ -526,7 +552,6 @@ index 60e14372f3..e577d4b406 100644
 +	"type":"slash_commands",
 +	"envelope_id":"env-1",
 +	"payload":{
-+		"type":"slash_commands",
 +		"command":"/beams",
 +		"text":"ls",
 +		"user_id":"U1",
@@ -539,7 +564,7 @@ index 60e14372f3..e577d4b406 100644
  var disconnectPayload = `{
    	"type": "disconnect",
    	"reason": "warning",
-@@ -128,6 +142,12 @@ func TestParseEvents(t *testing.T) {
+@@ -128,6 +141,12 @@ func TestParseEvents(t *testing.T) {
  			wantAck:        true,
  			hasInteraction: true,
  		},
