@@ -78,10 +78,10 @@ index b61b5fe458..5bd367d08f 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 0000000000..c8f67f007d
+index 0000000000..f33d17d298
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,156 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -98,6 +98,7 @@ index 0000000000..c8f67f007d
 +	"context"
 +	"fmt"
 +	"strings"
++	"sync"
 +
 +	"github.com/gravitational/trace"
 +
@@ -153,6 +154,7 @@ index 0000000000..c8f67f007d
 +	a.runner = BeamsCommandRunner{
 +		Config:           a.conf,
 +		DelegationClient: delegationClient.DelegationSessionServiceClient(),
++		ConnectMu:        &sync.Mutex{},
 +	}
 +	return nil
 +}
@@ -238,23 +240,26 @@ index 0000000000..c8f67f007d
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..ab658e7549
+index 0000000000..81c67743cd
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,343 @@
 +package slack
 +
 +import (
++	"bufio"
 +	"bytes"
 +	"context"
 +	"crypto/rand"
 +	"crypto/rsa"
++	"encoding/json"
 +	"fmt"
 +	"os"
 +	"os/exec"
 +	"path/filepath"
 +	"regexp"
 +	"strings"
++	"sync"
 +	"time"
 +
 +	"github.com/google/uuid"
@@ -271,12 +276,14 @@ index 0000000000..ab658e7549
 +const defaultBeamsCommandTimeout = 2 * time.Minute
 +
 +var safeSlackID = regexp.MustCompile(`^[A-Z0-9]+$`)
++var loginURLPattern = regexp.MustCompile(`https://[^\s]+`)
 +
 +// BeamsCommandRunner executes non-interactive tsh beams commands with a
 +// Teleport profile isolated to one Slack workspace/user pair.
 +type BeamsCommandRunner struct {
 +	Config           BeamsConfig
 +	DelegationClient delegationv1.DelegationSessionServiceClient
++	ConnectMu        *sync.Mutex
 +}
 +
 +func (r BeamsCommandRunner) Run(ctx context.Context, teamID, userID, text string) (string, error) {
@@ -306,19 +313,18 @@ index 0000000000..ab658e7549
 +	var args []string
 +	switch words[0] {
 +	case "connect":
-+		if len(words) != 2 {
-+			return "", trace.BadParameter("usage: /beams connect <delegation-session-id>")
++		if len(words) != 1 {
++			return "", trace.BadParameter("usage: /beams connect")
 +		}
-+		if _, err := uuid.Parse(words[1]); err != nil {
-+			return "", trace.BadParameter("invalid delegation session ID")
++		return r.startConnect(ctx, profileDir, sessionPath, username)
++	case "status":
++		if connectErr, err := os.ReadFile(filepath.Join(profileDir, "connect-error")); err == nil {
++			return "", trace.Errorf("Teleport connection failed: %s", strings.TrimSpace(string(connectErr)))
 +		}
-+		if err := r.generateDelegatedIdentity(ctx, words[1], username, identityPath); err != nil {
-+			return "", trace.Wrap(err, "validating delegation session")
++		if _, err := os.Stat(sessionPath); err == nil {
++			return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
 +		}
-+		if err := os.WriteFile(sessionPath, []byte(words[1]), 0o600); err != nil {
-+			return "", trace.Wrap(err)
-+		}
-+		return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
++		return "Not connected. Run `/beams connect`.", nil
 +	case "ls":
 +		args = []string{"beams", "ls", "--format=json"}
 +	case "add":
@@ -367,6 +373,132 @@ index 0000000000..ab658e7549
 +		return "", trace.Wrap(err, strings.TrimSpace(stderr.String()))
 +	}
 +	return truncateSlackOutput(stdout.String()), nil
++}
++
++func (r BeamsCommandRunner) startConnect(ctx context.Context, profileDir, sessionPath, username string) (string, error) {
++	if r.ConnectMu == nil {
++		return "", trace.BadParameter("connect coordinator is not configured")
++	}
++	if !r.ConnectMu.TryLock() {
++		return "", trace.CompareFailed("another Teleport login is already in progress; try again shortly")
++	}
++
++	loginDir := filepath.Join(profileDir, "login")
++	if err := os.RemoveAll(loginDir); err != nil {
++		r.ConnectMu.Unlock()
++		return "", trace.Wrap(err)
++	}
++	if err := os.MkdirAll(loginDir, 0o700); err != nil {
++		r.ConnectMu.Unlock()
++		return "", trace.Wrap(err)
++	}
++
++	args := []string{
++		"login",
++		"--proxy=" + r.Config.Proxy,
++		"--browser=none",
++		"--bind-addr=" + r.Config.LoginListen,
++		"--callback=" + r.Config.CallbackURL,
++	}
++	if r.Config.AuthConnector != "" {
++		args = append(args, "--auth="+r.Config.AuthConnector)
++	}
++	cmd := exec.CommandContext(ctx, r.Config.TSHPath, args...)
++	cmd.Env = append(os.Environ(),
++		"TELEPORT_HOME="+loginDir,
++		"TELEPORT_LOGIN_SKIP_REMOTE_HOST_WARNING=yes",
++	)
++	stderr, err := cmd.StderrPipe()
++	if err != nil {
++		r.ConnectMu.Unlock()
++		return "", trace.Wrap(err)
++	}
++	var stdout bytes.Buffer
++	cmd.Stdout = &stdout
++	if err := cmd.Start(); err != nil {
++		r.ConnectMu.Unlock()
++		return "", trace.Wrap(err)
++	}
++
++	scanner := bufio.NewScanner(stderr)
++	urlCh := make(chan string, 1)
++	go func() {
++		for scanner.Scan() {
++			if loginURL := loginURLPattern.FindString(scanner.Text()); loginURL != "" {
++				select {
++				case urlCh <- loginURL:
++				default:
++				}
++			}
++		}
++	}()
++
++	go func() {
++		defer r.ConnectMu.Unlock()
++		defer os.RemoveAll(loginDir)
++		if err := cmd.Wait(); err != nil {
++			_ = os.WriteFile(filepath.Join(profileDir, "connect-error"), []byte(err.Error()), 0o600)
++			return
++		}
++		if err := r.finishConnect(ctx, loginDir, sessionPath, username); err != nil {
++			_ = os.WriteFile(filepath.Join(profileDir, "connect-error"), []byte(err.Error()), 0o600)
++			return
++		}
++		_ = os.Remove(filepath.Join(profileDir, "connect-error"))
++	}()
++
++	select {
++	case loginURL := <-urlCh:
++		return fmt.Sprintf("Authenticate with Teleport: %s\nAfter login completes, run `/beams status`.", loginURL), nil
++	case <-time.After(15 * time.Second):
++		return "", trace.ConnectionProblem(nil, "timed out waiting for Teleport login URL")
++	case <-ctx.Done():
++		return "", trace.Wrap(ctx.Err())
++	}
++}
++
++func (r BeamsCommandRunner) finishConnect(ctx context.Context, loginDir, sessionPath, username string) error {
++	statusCmd := exec.CommandContext(ctx, r.Config.TSHPath, "status", "--format=json")
++	statusCmd.Env = append(os.Environ(), "TELEPORT_HOME="+loginDir)
++	statusOutput, err := statusCmd.Output()
++	if err != nil {
++		return trace.Wrap(err, "checking Teleport login")
++	}
++	var status struct {
++		Active struct {
++			Username string `json:"username"`
++		} `json:"active"`
++	}
++	if err := json.Unmarshal(statusOutput, &status); err != nil {
++		return trace.Wrap(err, "decoding Teleport login status")
++	}
++	if status.Active.Username != username {
++		return trace.AccessDenied("Teleport login does not match mapped user %q", username)
++	}
++
++	delegationCmd := exec.CommandContext(ctx, r.Config.TSHPath,
++		"delegation", "create-session",
++		"--bot="+r.Config.BotName,
++		"--allow-all",
++		"--session-ttl="+r.Config.DelegationTTL,
++	)
++	delegationCmd.Env = append(os.Environ(), "TELEPORT_HOME="+loginDir)
++	output, err := delegationCmd.CombinedOutput()
++	if err != nil {
++		return trace.Wrap(err, strings.TrimSpace(string(output)))
++	}
++	match := regexp.MustCompile(`[0-9a-fA-F-]{36}`).Find(output)
++	if match == nil {
++		return trace.BadParameter("could not find delegation session ID in tsh output")
++	}
++	sessionID, err := uuid.Parse(string(match))
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	if err := os.WriteFile(sessionPath, []byte(sessionID.String()), 0o600); err != nil {
++		return trace.Wrap(err)
++	}
++	return nil
 +}
 +
 +func (r BeamsCommandRunner) generateDelegatedIdentity(ctx context.Context, sessionID, username, identityPath string) error {
@@ -433,7 +565,8 @@ index 0000000000..ab658e7549
 +}
 +
 +func beamsHelp() string {
-+	return strings.TrimSpace(`/beams connect <delegation-session-id>
++	return strings.TrimSpace(`/beams connect
++/beams status
 +/beams ls
 +/beams add [--region=<region>]
 +/beams exec <name> <command...>
@@ -536,10 +669,10 @@ index d0abf811e9..14dd9e2c67 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf..d3db235515 100644
+index a8ecf146bf..3ea2123879 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,22 @@ enabled = false
+@@ -64,6 +64,27 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
@@ -553,6 +686,11 @@ index a8ecf146bf..d3db235515 100644
 +profiles_dir = "/var/lib/teleport-slack/beams"
 +identity_ttl = "15m"
 +command_timeout = "2m"
++callback_url = "https://slack-plugin.example.com"
++login_listen_addr = "0.0.0.0:8080"
++auth_connector = "your-sso-connector"
++bot_name = "beams-slack"
++delegation_ttl = "1h"
 +
 +# Explicit Slack user ID to Teleport username mapping. A delegation session is
 +# accepted only when its user matches this mapping.
@@ -562,7 +700,7 @@ index a8ecf146bf..d3db235515 100644
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +92,4 @@ enabled = false
+@@ -76,4 +97,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -570,7 +708,7 @@ index a8ecf146bf..d3db235515 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c1..3ba1427c3a 100644
+index e27fd004c1..ea1558095f 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -582,7 +720,7 @@ index e27fd004c1..3ba1427c3a 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,25 @@ type Config struct {
+@@ -39,12 +41,30 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -602,13 +740,18 @@ index e27fd004c1..3ba1427c3a 100644
 +	ProfilesDir    string            `toml:"profiles_dir"`
 +	IdentityTTL    string            `toml:"identity_ttl"`
 +	CommandTTL     string            `toml:"command_timeout"`
++	CallbackURL    string            `toml:"callback_url"`
++	LoginListen    string            `toml:"login_listen_addr"`
++	AuthConnector  string            `toml:"auth_connector"`
++	BotName        string            `toml:"bot_name"`
++	DelegationTTL  string            `toml:"delegation_ttl"`
 +	Users          map[string]string `toml:"users"`
 +}
 +
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +146,40 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +151,52 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -628,11 +771,23 @@ index e27fd004c1..3ba1427c3a 100644
 +		if c.Beams.IdentityTTL == "" {
 +			c.Beams.IdentityTTL = "15m"
 +		}
++		if c.Beams.LoginListen == "" {
++			c.Beams.LoginListen = "0.0.0.0:8080"
++		}
++		if c.Beams.DelegationTTL == "" {
++			c.Beams.DelegationTTL = "1h"
++		}
 +		if c.Beams.Proxy == "" {
 +			return trace.BadParameter("missing required value beams.proxy")
 +		}
 +		if c.Beams.PluginIdentity == "" {
 +			return trace.BadParameter("missing required value beams.plugin_identity")
++		}
++		if c.Beams.CallbackURL == "" {
++			return trace.BadParameter("missing required value beams.callback_url")
++		}
++		if c.Beams.BotName == "" {
++			return trace.BadParameter("missing required value beams.bot_name")
 +		}
 +		if len(c.Beams.Users) == 0 {
 +			return trace.BadParameter("missing required value beams.users")
@@ -649,7 +804,7 @@ index e27fd004c1..3ba1427c3a 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +250,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +267,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,
