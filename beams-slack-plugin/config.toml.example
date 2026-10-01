@@ -3,11 +3,11 @@ addr = "super-grass.beams.sh:443"
 identity = "/var/lib/teleport-slack/identity/identity"
 
 [slack]
-token = "/var/lib/teleport-slack/secrets/slack-bot-token"
+token = "/var/lib/teleport/plugins/slack/slack-bot-token"
 
 [review]
 enabled = false
-app_token = "/var/lib/teleport-slack/secrets/slack-app-token"
+app_token = "/var/lib/teleport/plugins/slack/slack-app-token"
 
 [beams]
 enabled = true

@@ -333,6 +333,20 @@ delegation session from their own `tsh` and paste the ID into Slack. This
 keeps per-user consent and attribution, needs no inbound callback, and works
 with any MFA the tenant supports.
 
+## Live deployment (ventura)
+
+Runs on host `ventura.local` (10.0.0.188, `ssh ventura.local` as `paul`) in
+`/usr/local/docker/beams-hackathon`, managed by `docker compose` (project
+`beams-hackathon`): `volume-init`, `tbot` (bot `scotty`, instance
+`9d773b47-bef6-4f36-b7eb-83deb955a23b`, joined 2026-10-01), and
+`teleport-slack`. The identity is in volume `beams-hackathon_plugin-identity`
+at `/var/lib/teleport-slack/identity/identity` (`bot-scotty`, roles
+`access-plugin, beam-user`). `beams-profiles` is the pre-existing external
+volume. Slack tokens are inline in `config.toml` there. Backups of the
+pre-tbot `docker-compose.yml`/`config.toml` are `*.bak-20261001-145142`; the
+old `docker run` container `clever_williams` is stopped, not removed, for
+rollback.
+
 ## Docker invocation
 
 The current design does not need `-p 8080:8080`.
@@ -441,7 +455,8 @@ The current repository head when this document was created is:
 
 1. Test bot-mode isolation, `/beams claude`, and `@scotty` in Slack (needs
    the Event Subscriptions and scopes listed in README).
-2. Bring up the tbot compose stack, then test `/beams connect`.
+2. tbot stack is live on ventura; test `/beams connect` and new beam ownership
+   (`bot-scotty` when unconnected, the user when connected).
 3. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
    `/beams scp`, and `/beams rm`.
 4. Rotate the exposed GitHub PAT.

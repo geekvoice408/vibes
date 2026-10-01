@@ -114,11 +114,14 @@ no hand-signed identity is needed and `/beams connect` delegation works.
 tctl bots update scotty --set-roles=access-plugin,beam-user
 tctl bots instances add scotty      # copy the join token it prints
 printf '%s' '<join-token>' > secrets/tbot-token
+docker volume create beams-profiles  # first install only
 docker compose up -d
 ```
 
-`secrets/` also holds `slack-bot-token` and `slack-app-token`; see
-`config.toml.example` for the paths. The join token is used once; afterwards
+`secrets/` is mounted at `/var/lib/teleport/plugins/slack` and can hold
+`slack-bot-token` and `slack-app-token`; see `config.toml.example` for the
+paths. `beams-profiles` is an external volume so per-user beam indexes survive
+re-creating the stack. The join token is used once; afterwards
 `tbot` renews from the `tbot-state` volume. If that volume is lost or `tbot`
 stays down past its certificate TTL, add a new instance token.
 
