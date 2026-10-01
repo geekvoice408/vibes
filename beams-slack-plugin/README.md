@@ -104,6 +104,24 @@ git apply ../teleport.patch
 The container runs as UID/GID `10001` and stores profiles under
 `/var/lib/teleport-slack/beams`.
 
+## Running with tbot
+
+`docker-compose.yml` runs `tbot` beside the plugin. `tbot` joins as the
+`scotty` bot and keeps `/var/lib/teleport-slack/identity/identity` renewed, so
+no hand-signed identity is needed and `/beams connect` delegation works.
+
+```sh
+tctl bots update scotty --set-roles=access-plugin,beam-user
+tctl bots instances add scotty      # copy the join token it prints
+printf '%s' '<join-token>' > secrets/tbot-token
+docker compose up -d
+```
+
+`secrets/` also holds `slack-bot-token` and `slack-app-token`; see
+`config.toml.example` for the paths. The join token is used once; afterwards
+`tbot` renews from the `tbot-state` volume. If that volume is lost or `tbot`
+stays down past its certificate TTL, add a new instance token.
+
 ## Automated container builds
 
 The GitHub Actions workflow at

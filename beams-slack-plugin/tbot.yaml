@@ -1,0 +1,17 @@
+version: v2
+proxy_server: super-grass.beams.sh:443
+onboarding:
+  join_method: token
+  # File containing the join token from `tctl bots instances add scotty`.
+  # It is only used for the first join; tbot then renews from its storage.
+  token: /secrets/tbot-token
+storage:
+  type: directory
+  path: /var/lib/tbot
+outputs:
+  # Writes /identity/identity with all of the bot's roles. The plugin uses it
+  # as both teleport.identity and beams.plugin_identity.
+  - type: identity
+    destination:
+      type: directory
+      path: /identity

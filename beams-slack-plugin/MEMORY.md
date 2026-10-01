@@ -237,9 +237,13 @@ Teleport v18 facts behind this (checked in source):
 - Delegation `GenerateCerts` requires a bot caller (`BotName` set), so
   delegation needs `plugin_identity` from `tbot`, not `tctl auth sign`.
 
-Current plugin identity: `tctl auth sign --user=access-plugin` (roles
-`access-plugin`, `beam-user`), allowed by role `access-plugin-impersonator`.
-It does not renew; switching to `tbot` for bot `scotty` is pending.
+Plugin identity: `docker-compose.yml` runs `tbot` (config `tbot.yaml`) as bot
+`scotty`, writing a renewing identity output to the `plugin-identity` volume
+(`/var/lib/teleport-slack/identity/identity` in the plugin). The bot needs
+roles `access-plugin,beam-user`; `bot_name = "scotty"` for delegation. Bot-owned
+beams are now owned by `bot-scotty`. The older hand-signed
+`tctl auth sign --user=access-plugin` identity (via role
+`access-plugin-impersonator`) is no longer needed.
 
 `/beams claude <beam> [--continue] <prompt>` runs `claude -p` in the beam via
 `tsh beams exec`, as one shell-quoted string, with `claude_timeout` (15m).
@@ -437,7 +441,7 @@ The current repository head when this document was created is:
 
 1. Test bot-mode isolation, `/beams claude`, and `@scotty` in Slack (needs
    the Event Subscriptions and scopes listed in README).
-2. Move `plugin_identity` to `tbot` for `scotty`, then test `/beams connect`.
+2. Bring up the tbot compose stack, then test `/beams connect`.
 3. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
    `/beams scp`, and `/beams rm`.
 4. Rotate the exposed GitHub PAT.

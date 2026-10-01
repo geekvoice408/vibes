@@ -1,24 +1,24 @@
 [teleport]
-addr = "example.teleport.sh:443"
-identity = "/var/lib/teleport-slack/plugin-identity"
+addr = "super-grass.beams.sh:443"
+identity = "/var/lib/teleport-slack/identity/identity"
 
 [slack]
-token = "/var/lib/teleport-slack/slack-bot-token"
+token = "/var/lib/teleport-slack/secrets/slack-bot-token"
 
 [review]
 enabled = false
-app_token = "/var/lib/teleport-slack/slack-app-token"
+app_token = "/var/lib/teleport-slack/secrets/slack-app-token"
 
 [beams]
 enabled = true
 tsh_path = "/usr/local/bin/tsh"
-proxy = "example.teleport.sh:443"
-plugin_identity = "/var/lib/teleport-slack/plugin-identity"
+proxy = "super-grass.beams.sh:443"
+plugin_identity = "/var/lib/teleport-slack/identity/identity"
 profiles_dir = "/var/lib/teleport-slack/beams"
 identity_ttl = "15m"
 command_timeout = "2m"
 claude_timeout = "15m"
-bot_name = "beams-slack"
+bot_name = "scotty"
 delegation_ttl = "168h"
 
 required_role = "beam-user"

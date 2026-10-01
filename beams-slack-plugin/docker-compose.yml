@@ -1,11 +1,42 @@
 services:
-  teleport-slack:
-    build: .
+  # Named volumes start out owned by root; hand them to the UID both
+  # containers run as so tbot can write and the plugin can read.
+  volume-init:
+    image: busybox:1.37
+    command: ["chown", "-R", "10001:10001", "/var/lib/tbot", "/identity", "/beams"]
+    volumes:
+      - tbot-state:/var/lib/tbot
+      - plugin-identity:/identity
+      - beams-profiles:/beams
+    restart: "no"
+
+  tbot:
+    image: public.ecr.aws/gravitational/tbot-distroless:18.11.1
+    command: ["start", "-c", "/etc/tbot.yaml"]
+    user: "10001:10001"
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./tbot.yaml:/etc/tbot.yaml:ro
+      - ./secrets/tbot-token:/secrets/tbot-token:ro
+      - tbot-state:/var/lib/tbot
+      - plugin-identity:/identity
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  teleport-slack:
+    image: ghcr.io/geekvoice408/beams-slack-plugin:latest
+    restart: unless-stopped
+    depends_on:
+      - tbot
     volumes:
       - ./config.toml:/etc/teleport-slack/config.toml:ro
+      - ./secrets:/var/lib/teleport-slack/secrets:ro
+      - plugin-identity:/var/lib/teleport-slack/identity:ro
       - beams-profiles:/var/lib/teleport-slack/beams
     security_opt:
       - no-new-privileges:true
@@ -13,5 +44,6 @@ services:
       - ALL
 
 volumes:
+  tbot-state:
+  plugin-identity:
   beams-profiles:
-
