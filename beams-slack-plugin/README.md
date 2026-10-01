@@ -22,13 +22,16 @@ Implemented:
 - Slash-command dispatch to the command runner
 - Private asynchronous command results through Slack
 
-The Slack integration is authenticated by Machine ID. `/beams connect` replies
-with a `tsh delegation create-session` command for the configured bot. The user
-runs it from their own signed-in terminal, then runs
-`/beams connect <delegation-session-id>`. The plugin validates the session
-through the delegation API, verifies the certificate username against the Slack
-mapping, and retains only the session ID. No inbound callback, public container
-port, or headless login is needed.
+The Slack integration is authenticated by Machine ID. By default
+(`beams.run_as = "bot"`) every Beams command runs with the plugin's own Machine
+ID identity, which must hold the `beam-user` role. No `/beams connect` step is
+needed; the Slack user allowlist is the authorization boundary, and all allowed
+users share the bot's beams.
+
+With `beams.run_as = "user"`, commands instead run as the mapped Teleport user.
+`/beams connect` replies with a `tsh delegation create-session` command for the
+configured bot; the user runs it from their own signed-in terminal, then runs
+`/beams connect <delegation-session-id>`.
 
 Still required:
 

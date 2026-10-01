@@ -1,6 +1,6 @@
 diff --git a/integrations/access/slack/Dockerfile.beams b/integrations/access/slack/Dockerfile.beams
 new file mode 100644
-index 0000000000..c780cc84a3
+index 00000000000..c780cc84a3c
 --- /dev/null
 +++ b/integrations/access/slack/Dockerfile.beams
 @@ -0,0 +1,43 @@
@@ -48,7 +48,7 @@ index 0000000000..c780cc84a3
 +ENTRYPOINT ["/usr/local/bin/teleport-slack"]
 +CMD ["start", "--config=/etc/teleport-slack/config.toml"]
 diff --git a/integrations/access/slack/README.md b/integrations/access/slack/README.md
-index b61b5fe458..5bd367d08f 100644
+index b61b5fe458c..369af314958 100644
 --- a/integrations/access/slack/README.md
 +++ b/integrations/access/slack/README.md
 @@ -5,5 +5,23 @@ an alert to a Slack channel when an access request is created. You can find the
@@ -71,13 +71,13 @@ index b61b5fe458..5bd367d08f 100644
 +
 +The image runs as UID/GID `10001`, drops all Linux capabilities in the Compose
 +example, and only needs outbound access to Slack and configured Teleport
-+tenants. Port `8080` is reserved for the per-user SSO callback service.
++tenants.
 +
  If you have a self-hosted Teleport deployment, you can find information for
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 0000000000..f33d17d298
+index 00000000000..c8f67f007d0
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
 @@ -0,0 +1,154 @@
@@ -237,10 +237,10 @@ index 0000000000..f33d17d298
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..f56946e44b
+index 00000000000..6ad0f3c36ff
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,250 @@
 +package slack
 +
 +import (
@@ -304,6 +304,12 @@ index 0000000000..f56946e44b
 +
 +	var args []string
 +	switch words[0] {
++	case "connect", "status":
++		if r.Config.RunAs == BeamsRunAsBot {
++			return fmt.Sprintf("Beams commands run as the Slack plugin's Machine ID bot on %s; no connection is needed.", r.Config.Proxy), nil
++		}
++	}
++	switch words[0] {
 +	case "connect":
 +		if len(words) == 1 {
 +			return r.connectInstructions(), nil
@@ -339,15 +345,20 @@ index 0000000000..f56946e44b
 +		return "", trace.BadParameter("unknown command %q\n%s", words[0], beamsHelp())
 +	}
 +
-+	sessionID, err := os.ReadFile(sessionPath)
-+	if err != nil {
-+		if os.IsNotExist(err) {
-+			return "", trace.AccessDenied("not connected; run /beams connect")
++	if r.Config.RunAs == BeamsRunAsBot {
++		// tbot keeps the plugin identity renewed, so use it as-is.
++		identityPath = r.Config.PluginIdentity
++	} else {
++		sessionID, err := os.ReadFile(sessionPath)
++		if err != nil {
++			if os.IsNotExist(err) {
++				return "", trace.AccessDenied("not connected; run /beams connect")
++			}
++			return "", trace.Wrap(err)
 +		}
-+		return "", trace.Wrap(err)
-+	}
-+	if err := r.generateDelegatedIdentity(ctx, strings.TrimSpace(string(sessionID)), username, identityPath); err != nil {
-+		return "", trace.Wrap(err, "refreshing delegated Beams identity")
++		if err := r.generateDelegatedIdentity(ctx, strings.TrimSpace(string(sessionID)), username, identityPath); err != nil {
++			return "", trace.Wrap(err, "refreshing delegated Beams identity")
++		}
 +	}
 +
 +	timeout := defaultBeamsCommandTimeout
@@ -481,7 +492,7 @@ index 0000000000..f56946e44b
 +	return s
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
-index d0abf811e9..14dd9e2c67 100644
+index d0abf811e9a..14dd9e2c677 100644
 --- a/integrations/access/slack/bot.go
 +++ b/integrations/access/slack/bot.go
 @@ -19,11 +19,15 @@
@@ -562,17 +573,21 @@ index d0abf811e9..14dd9e2c67 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf..4484f4e490 100644
+index a8ecf146bf6..2c586511b59 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,24 @@ enabled = false
+@@ -64,6 +64,28 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
 +[beams]
 +# Enable the /beams slash command. Each Slack user receives an isolated tsh
-+# profile and must authenticate to the Teleport tenant through SSO.
++# profile directory.
 +enabled = false
++# "bot" runs commands with the plugin's Machine ID identity, which needs the
++# beam-user role. "user" runs them as the mapped Teleport user through a
++# delegation session created with /beams connect.
++run_as = "bot"
 +tsh_path = "tsh"
 +proxy = "example.teleport.sh:443"
 +plugin_identity = "/var/lib/teleport/plugins/slack/identity"
@@ -582,15 +597,15 @@ index a8ecf146bf..4484f4e490 100644
 +bot_name = "beams-slack"
 +delegation_ttl = "1h"
 +
-+# Explicit Slack user ID to Teleport username mapping. A delegation session is
-+# accepted only when its user matches this mapping.
++# Explicit Slack user ID allowlist. With run_as = "user", a delegation session
++# is accepted only when its user matches this mapping.
 +[beams.users]
 +"U0123456789" = "slack-beams-alice"
 +
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +94,4 @@ enabled = false
+@@ -76,4 +98,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -598,7 +613,7 @@ index a8ecf146bf..4484f4e490 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c1..8ae7803ae8 100644
+index e27fd004c15..29ef8b79458 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -610,7 +625,7 @@ index e27fd004c1..8ae7803ae8 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,27 @@ type Config struct {
+@@ -39,12 +41,36 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -621,9 +636,18 @@ index e27fd004c1..8ae7803ae8 100644
  	Clock               clockwork.Clock
  }
  
++const (
++	// BeamsRunAsBot runs Beams commands with the plugin's Machine ID identity.
++	BeamsRunAsBot = "bot"
++	// BeamsRunAsUser runs Beams commands as the mapped Teleport user through a
++	// user-created delegation session.
++	BeamsRunAsUser = "user"
++)
++
 +// BeamsConfig configures the /beams Slack command.
 +type BeamsConfig struct {
 +	Enabled        bool              `toml:"enabled"`
++	RunAs          string            `toml:"run_as"`
 +	TSHPath        string            `toml:"tsh_path"`
 +	Proxy          string            `toml:"proxy"`
 +	PluginIdentity string            `toml:"plugin_identity"`
@@ -638,11 +662,17 @@ index e27fd004c1..8ae7803ae8 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +148,46 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +157,52 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
 +	if c.Beams.Enabled {
++		if c.Beams.RunAs == "" {
++			c.Beams.RunAs = BeamsRunAsBot
++		}
++		if c.Beams.RunAs != BeamsRunAsBot && c.Beams.RunAs != BeamsRunAsUser {
++			return trace.BadParameter("beams.run_as must be %q or %q", BeamsRunAsBot, BeamsRunAsUser)
++		}
 +		if c.Beams.TSHPath == "" {
 +			c.Beams.TSHPath = "tsh"
 +		}
@@ -667,7 +697,7 @@ index e27fd004c1..8ae7803ae8 100644
 +		if c.Beams.PluginIdentity == "" {
 +			return trace.BadParameter("missing required value beams.plugin_identity")
 +		}
-+		if c.Beams.BotName == "" {
++		if c.Beams.RunAs == BeamsRunAsUser && c.Beams.BotName == "" {
 +			return trace.BadParameter("missing required value beams.bot_name")
 +		}
 +		if len(c.Beams.Users) == 0 {
@@ -685,7 +715,7 @@ index e27fd004c1..8ae7803ae8 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +258,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +273,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,
@@ -695,7 +725,7 @@ index e27fd004c1..8ae7803ae8 100644
  }
 diff --git a/integrations/access/slack/docker-compose.beams.yml b/integrations/access/slack/docker-compose.beams.yml
 new file mode 100644
-index 0000000000..bf8a541c4c
+index 00000000000..bf8a541c4c2
 --- /dev/null
 +++ b/integrations/access/slack/docker-compose.beams.yml
 @@ -0,0 +1,16 @@
@@ -716,7 +746,7 @@ index 0000000000..bf8a541c4c
 +volumes:
 +  beams-profiles:
 diff --git a/integrations/access/slack/socketmode.go b/integrations/access/slack/socketmode.go
-index 831a3ddb02..046a16e426 100644
+index 831a3ddb02b..046a16e426b 100644
 --- a/integrations/access/slack/socketmode.go
 +++ b/integrations/access/slack/socketmode.go
 @@ -293,7 +293,7 @@ func (smc *SocketModeClient) parseEvents(ctx context.Context, rawCh <-chan json.
@@ -755,7 +785,7 @@ index 831a3ddb02..046a16e426 100644
  
  				// Send to consumer app to handle interactions downstream.
 diff --git a/integrations/access/slack/socketmode_test.go b/integrations/access/slack/socketmode_test.go
-index 60e14372f3..272b546b49 100644
+index 60e14372f32..272b546b498 100644
 --- a/integrations/access/slack/socketmode_test.go
 +++ b/integrations/access/slack/socketmode_test.go
 @@ -53,6 +53,19 @@ var nonBlockActionsPayload = `{
@@ -792,7 +822,7 @@ index 60e14372f3..272b546b49 100644
  			name:    "malformed payload; skip",
  			payload: malformedPayload,
 diff --git a/integrations/access/slack/types.go b/integrations/access/slack/types.go
-index cfac4452c2..cc9c4343c7 100644
+index cfac4452c25..cc9c4343c7c 100644
 --- a/integrations/access/slack/types.go
 +++ b/integrations/access/slack/types.go
 @@ -30,6 +30,7 @@ const (

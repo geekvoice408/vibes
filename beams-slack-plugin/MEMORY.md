@@ -207,7 +207,18 @@ Observed Teleport proxy:
 super-grass.beams.sh:443
 ```
 
-### Delegation flow
+### Run modes
+
+`beams.run_as` selects the identity used for `tsh beams`:
+
+- `bot` (default): the plugin's Machine ID identity (`plugin_identity`) is
+  passed straight to `tsh --identity`. The bot was granted the `beam-user`
+  role. `/beams connect` and `/beams status` just report that no connection is
+  needed. All allowed Slack users share the bot's beams, and Teleport audit
+  attributes actions to the bot, not the human.
+- `user`: the delegation flow below.
+
+### Delegation flow (`run_as = "user"`)
 
 Headless login was removed (see "Resolved: Teleport v18 headless MFA"). The
 connection flow is:
@@ -386,12 +397,7 @@ The current repository head when this document was created is:
 
 ## Immediate next steps
 
-1. Run `/beams connect`, run the printed `tsh delegation create-session`
-   command locally, then `/beams connect <id>`.
-2. Confirm `/beams status` reports the delegation connection.
-3. Test `/beams ls`.
-4. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
+1. Test `/beams ls` with the default `run_as = "bot"`.
+2. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
    `/beams scp`, and `/beams rm`.
-5. Confirm all actions are attributed to both the human user and delegated
-   workload identity in Teleport audit events.
-6. Rotate the exposed GitHub PAT.
+3. Rotate the exposed GitHub PAT.
