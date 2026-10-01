@@ -42,6 +42,5 @@ COPY --from=build /out/teleport-slack /usr/local/bin/teleport-slack
 COPY --from=build /out/tsh /usr/local/bin/tsh
 USER 10001:10001
 VOLUME ["/var/lib/teleport-slack/beams"]
-EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/teleport-slack"]
 CMD ["start", "--config=/etc/teleport-slack/config.toml"]

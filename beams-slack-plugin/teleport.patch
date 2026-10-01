@@ -1,9 +1,9 @@
 diff --git a/integrations/access/slack/Dockerfile.beams b/integrations/access/slack/Dockerfile.beams
 new file mode 100644
-index 0000000000..cfef8b0111
+index 0000000000..c780cc84a3
 --- /dev/null
 +++ b/integrations/access/slack/Dockerfile.beams
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,43 @@
 +# syntax=docker/dockerfile:1.7
 +
 +ARG GO_IMAGE=golang:1.26.7-bookworm
@@ -45,7 +45,6 @@ index 0000000000..cfef8b0111
 +
 +USER 10001:10001
 +VOLUME ["/var/lib/teleport-slack/beams"]
-+EXPOSE 8080
 +ENTRYPOINT ["/usr/local/bin/teleport-slack"]
 +CMD ["start", "--config=/etc/teleport-slack/config.toml"]
 diff --git a/integrations/access/slack/README.md b/integrations/access/slack/README.md
@@ -240,10 +239,10 @@ index 0000000000..f33d17d298
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..81c67743cd
+index 0000000000..76d09dd86a
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,343 @@
+@@ -0,0 +1,336 @@
 +package slack
 +
 +import (
@@ -396,18 +395,11 @@ index 0000000000..81c67743cd
 +	args := []string{
 +		"login",
 +		"--proxy=" + r.Config.Proxy,
-+		"--browser=none",
-+		"--bind-addr=" + r.Config.LoginListen,
-+		"--callback=" + r.Config.CallbackURL,
-+	}
-+	if r.Config.AuthConnector != "" {
-+		args = append(args, "--auth="+r.Config.AuthConnector)
++		"--user=" + username,
++		"--headless",
 +	}
 +	cmd := exec.CommandContext(ctx, r.Config.TSHPath, args...)
-+	cmd.Env = append(os.Environ(),
-+		"TELEPORT_HOME="+loginDir,
-+		"TELEPORT_LOGIN_SKIP_REMOTE_HOST_WARNING=yes",
-+	)
++	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+loginDir)
 +	stderr, err := cmd.StderrPipe()
 +	if err != nil {
 +		r.ConnectMu.Unlock()
@@ -669,10 +661,10 @@ index d0abf811e9..14dd9e2c67 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf..3ea2123879 100644
+index a8ecf146bf..4484f4e490 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,27 @@ enabled = false
+@@ -64,6 +64,24 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
@@ -686,9 +678,6 @@ index a8ecf146bf..3ea2123879 100644
 +profiles_dir = "/var/lib/teleport-slack/beams"
 +identity_ttl = "15m"
 +command_timeout = "2m"
-+callback_url = "https://slack-plugin.example.com"
-+login_listen_addr = "0.0.0.0:8080"
-+auth_connector = "your-sso-connector"
 +bot_name = "beams-slack"
 +delegation_ttl = "1h"
 +
@@ -700,7 +689,7 @@ index a8ecf146bf..3ea2123879 100644
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +97,4 @@ enabled = false
+@@ -76,4 +94,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -708,7 +697,7 @@ index a8ecf146bf..3ea2123879 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c1..ea1558095f 100644
+index e27fd004c1..8ae7803ae8 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -720,7 +709,7 @@ index e27fd004c1..ea1558095f 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,30 @@ type Config struct {
+@@ -39,12 +41,27 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -740,9 +729,6 @@ index e27fd004c1..ea1558095f 100644
 +	ProfilesDir    string            `toml:"profiles_dir"`
 +	IdentityTTL    string            `toml:"identity_ttl"`
 +	CommandTTL     string            `toml:"command_timeout"`
-+	CallbackURL    string            `toml:"callback_url"`
-+	LoginListen    string            `toml:"login_listen_addr"`
-+	AuthConnector  string            `toml:"auth_connector"`
 +	BotName        string            `toml:"bot_name"`
 +	DelegationTTL  string            `toml:"delegation_ttl"`
 +	Users          map[string]string `toml:"users"`
@@ -751,7 +737,7 @@ index e27fd004c1..ea1558095f 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +151,52 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +148,46 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -771,9 +757,6 @@ index e27fd004c1..ea1558095f 100644
 +		if c.Beams.IdentityTTL == "" {
 +			c.Beams.IdentityTTL = "15m"
 +		}
-+		if c.Beams.LoginListen == "" {
-+			c.Beams.LoginListen = "0.0.0.0:8080"
-+		}
 +		if c.Beams.DelegationTTL == "" {
 +			c.Beams.DelegationTTL = "1h"
 +		}
@@ -782,9 +765,6 @@ index e27fd004c1..ea1558095f 100644
 +		}
 +		if c.Beams.PluginIdentity == "" {
 +			return trace.BadParameter("missing required value beams.plugin_identity")
-+		}
-+		if c.Beams.CallbackURL == "" {
-+			return trace.BadParameter("missing required value beams.callback_url")
 +		}
 +		if c.Beams.BotName == "" {
 +			return trace.BadParameter("missing required value beams.bot_name")
@@ -804,7 +784,7 @@ index e27fd004c1..ea1558095f 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +267,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +258,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,
@@ -814,18 +794,16 @@ index e27fd004c1..ea1558095f 100644
  }
 diff --git a/integrations/access/slack/docker-compose.beams.yml b/integrations/access/slack/docker-compose.beams.yml
 new file mode 100644
-index 0000000000..9830308ab7
+index 0000000000..bf8a541c4c
 --- /dev/null
 +++ b/integrations/access/slack/docker-compose.beams.yml
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,16 @@
 +services:
 +  teleport-slack:
 +    build:
 +      context: ../../..
 +      dockerfile: integrations/access/slack/Dockerfile.beams
 +    restart: unless-stopped
-+    ports:
-+      - "8080:8080"
 +    volumes:
 +      - ./cmd/teleport-slack/example_config.toml:/etc/teleport-slack/config.toml:ro
 +      - beams-profiles:/var/lib/teleport-slack/beams
