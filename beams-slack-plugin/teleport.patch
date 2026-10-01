@@ -80,7 +80,7 @@ new file mode 100644
 index 0000000000..f33d17d298
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,154 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -97,7 +97,6 @@ index 0000000000..f33d17d298
 +	"context"
 +	"fmt"
 +	"strings"
-+	"sync"
 +
 +	"github.com/gravitational/trace"
 +
@@ -153,7 +152,6 @@ index 0000000000..f33d17d298
 +	a.runner = BeamsCommandRunner{
 +		Config:           a.conf,
 +		DelegationClient: delegationClient.DelegationSessionServiceClient(),
-+		ConnectMu:        &sync.Mutex{},
 +	}
 +	return nil
 +}
@@ -242,23 +240,20 @@ new file mode 100644
 index 0000000000..f56946e44b
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,239 @@
 +package slack
 +
 +import (
-+	"bufio"
 +	"bytes"
 +	"context"
 +	"crypto/rand"
 +	"crypto/rsa"
-+	"encoding/json"
 +	"fmt"
 +	"os"
 +	"os/exec"
 +	"path/filepath"
 +	"regexp"
 +	"strings"
-+	"sync"
 +	"time"
 +
 +	"github.com/google/uuid"
@@ -275,14 +270,12 @@ index 0000000000..f56946e44b
 +const defaultBeamsCommandTimeout = 2 * time.Minute
 +
 +var safeSlackID = regexp.MustCompile(`^[A-Z0-9]+$`)
-+var loginURLPattern = regexp.MustCompile(`https://[^\s]+`)
 +
 +// BeamsCommandRunner executes non-interactive tsh beams commands with a
 +// Teleport profile isolated to one Slack workspace/user pair.
 +type BeamsCommandRunner struct {
 +	Config           BeamsConfig
 +	DelegationClient delegationv1.DelegationSessionServiceClient
-+	ConnectMu        *sync.Mutex
 +}
 +
 +func (r BeamsCommandRunner) Run(ctx context.Context, teamID, userID, text string) (string, error) {
@@ -312,14 +305,24 @@ index 0000000000..f56946e44b
 +	var args []string
 +	switch words[0] {
 +	case "connect":
-+		if len(words) != 1 {
-+			return "", trace.BadParameter("usage: /beams connect")
++		if len(words) == 1 {
++			return r.connectInstructions(), nil
 +		}
-+		return r.startConnect(ctx, profileDir, sessionPath, username)
++		if len(words) != 2 {
++			return "", trace.BadParameter("usage: /beams connect [<delegation-session-id>]")
++		}
++		sessionID, err := uuid.Parse(words[1])
++		if err != nil {
++			return "", trace.BadParameter("invalid delegation session ID")
++		}
++		if err := r.generateDelegatedIdentity(ctx, sessionID.String(), username, identityPath); err != nil {
++			return "", trace.Wrap(err, "validating delegation session")
++		}
++		if err := os.WriteFile(sessionPath, []byte(sessionID.String()), 0o600); err != nil {
++			return "", trace.Wrap(err)
++		}
++		return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
 +	case "status":
-+		if connectErr, err := os.ReadFile(filepath.Join(profileDir, "connect-error")); err == nil {
-+			return "", trace.Errorf("Teleport connection failed: %s", strings.TrimSpace(string(connectErr)))
-+		}
 +		if _, err := os.Stat(sessionPath); err == nil {
 +			return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
 +		}
@@ -374,151 +377,21 @@ index 0000000000..f56946e44b
 +	return truncateSlackOutput(stdout.String()), nil
 +}
 +
-+func (r BeamsCommandRunner) startConnect(ctx context.Context, profileDir, sessionPath, username string) (string, error) {
-+	if r.ConnectMu == nil {
-+		return "", trace.BadParameter("connect coordinator is not configured")
-+	}
-+	if !r.ConnectMu.TryLock() {
-+		return "", trace.CompareFailed("another Teleport login is already in progress; try again shortly")
-+	}
-+
-+	loginDir := filepath.Join(profileDir, "login")
-+	if err := os.RemoveAll(loginDir); err != nil {
-+		r.ConnectMu.Unlock()
-+		return "", trace.Wrap(err)
-+	}
-+	if err := os.MkdirAll(loginDir, 0o700); err != nil {
-+		r.ConnectMu.Unlock()
-+		return "", trace.Wrap(err)
-+	}
-+
-+	loginCtx, cancelLogin := context.WithTimeout(context.Background(), 10*time.Minute)
-+	args := []string{
-+		"ls",
-+		"--proxy=" + r.Config.Proxy,
-+		"--user=" + username,
-+		"--headless",
-+		"--format=json",
-+	}
-+	cmd := exec.CommandContext(loginCtx, r.Config.TSHPath, args...)
-+	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+loginDir)
-+	stderr, err := cmd.StderrPipe()
-+	if err != nil {
-+		cancelLogin()
-+		r.ConnectMu.Unlock()
-+		return "", trace.Wrap(err)
-+	}
-+	var stdout bytes.Buffer
-+	cmd.Stdout = &stdout
-+	if err := cmd.Start(); err != nil {
-+		cancelLogin()
-+		r.ConnectMu.Unlock()
-+		return "", trace.Wrap(err)
-+	}
-+
-+	scanner := bufio.NewScanner(stderr)
-+	urlCh := make(chan string, 1)
-+	resultCh := make(chan error, 1)
-+	go func() {
-+		defer cancelLogin()
-+		defer r.ConnectMu.Unlock()
-+		defer os.RemoveAll(loginDir)
-+
-+		var stderrLines []string
-+		for scanner.Scan() {
-+			line := scanner.Text()
-+			stderrLines = append(stderrLines, line)
-+			if loginURL := loginURLPattern.FindString(line); loginURL != "" {
-+				select {
-+				case urlCh <- loginURL:
-+				default:
-+				}
-+			}
-+		}
-+		if err := cmd.Wait(); err != nil {
-+			detail := strings.TrimSpace(strings.Join(stderrLines, "\n"))
-+			connectErr := trace.Wrap(err, detail)
-+			_ = os.WriteFile(filepath.Join(profileDir, "connect-error"), []byte(connectErr.Error()), 0o600)
-+			resultCh <- connectErr
-+			return
-+		}
-+		if err := r.finishConnect(loginCtx, loginDir, sessionPath, username); err != nil {
-+			_ = os.WriteFile(filepath.Join(profileDir, "connect-error"), []byte(err.Error()), 0o600)
-+			resultCh <- err
-+			return
-+		}
-+		_ = os.Remove(filepath.Join(profileDir, "connect-error"))
-+		resultCh <- nil
-+	}()
-+
-+	select {
-+	case loginURL := <-urlCh:
-+		headlessID := filepath.Base(loginURL)
-+		approveCommand := fmt.Sprintf(
-+			"tsh headless approve --mfa-mode=browser --user=%s --proxy=%s %s",
-+			username,
-+			r.Config.Proxy,
-+			headlessID,
-+		)
-+		return fmt.Sprintf(
-+			"Approve this login from a terminal where you are signed in to Teleport:\n```%s```\n\nBrowser fallback: %s\nAfter approval completes, run `/beams status`.",
-+			approveCommand,
-+			loginURL,
-+		), nil
-+	case err := <-resultCh:
-+		if err != nil {
-+			return "", trace.Wrap(err, "starting Teleport headless login")
-+		}
-+		return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
-+	case <-time.After(15 * time.Second):
-+		return "", trace.ConnectionProblem(nil, "timed out waiting for Teleport login URL")
-+	case <-ctx.Done():
-+		return "", trace.Wrap(ctx.Err())
-+	}
-+}
-+
-+func (r BeamsCommandRunner) finishConnect(ctx context.Context, loginDir, sessionPath, username string) error {
-+	statusCmd := exec.CommandContext(ctx, r.Config.TSHPath, "status", "--format=json")
-+	statusCmd.Env = append(os.Environ(), "TELEPORT_HOME="+loginDir)
-+	statusOutput, err := statusCmd.Output()
-+	if err != nil {
-+		return trace.Wrap(err, "checking Teleport login")
-+	}
-+	var status struct {
-+		Active struct {
-+			Username string `json:"username"`
-+		} `json:"active"`
-+	}
-+	if err := json.Unmarshal(statusOutput, &status); err != nil {
-+		return trace.Wrap(err, "decoding Teleport login status")
-+	}
-+	if status.Active.Username != username {
-+		return trace.AccessDenied("Teleport login does not match mapped user %q", username)
-+	}
-+
-+	delegationCmd := exec.CommandContext(ctx, r.Config.TSHPath,
-+		"delegation", "create-session",
-+		"--bot="+r.Config.BotName,
-+		"--allow-all",
-+		"--session-ttl="+r.Config.DelegationTTL,
++// connectInstructions tells the user how to authorize the Machine ID bot from
++// their own tsh session. Teleport handles SSO and MFA locally, so the plugin
++// never needs to broker a user login.
++func (r BeamsCommandRunner) connectInstructions() string {
++	createCommand := fmt.Sprintf(
++		"tsh delegation create-session --proxy=%s --bot=%s --allow-all --session-ttl=%s",
++		r.Config.Proxy,
++		r.Config.BotName,
++		r.Config.DelegationTTL,
 +	)
-+	delegationCmd.Env = append(os.Environ(), "TELEPORT_HOME="+loginDir)
-+	output, err := delegationCmd.CombinedOutput()
-+	if err != nil {
-+		return trace.Wrap(err, strings.TrimSpace(string(output)))
-+	}
-+	match := regexp.MustCompile(`[0-9a-fA-F-]{36}`).Find(output)
-+	if match == nil {
-+		return trace.BadParameter("could not find delegation session ID in tsh output")
-+	}
-+	sessionID, err := uuid.Parse(string(match))
-+	if err != nil {
-+		return trace.Wrap(err)
-+	}
-+	if err := os.WriteFile(sessionPath, []byte(sessionID.String()), 0o600); err != nil {
-+		return trace.Wrap(err)
-+	}
-+	return nil
++	return fmt.Sprintf(
++		"Authorize the %s bot from a terminal where you are signed in to Teleport:\n```%s```\n\nThen run `/beams connect <delegation-session-id>` with the ID it prints.",
++		r.Config.BotName,
++		createCommand,
++	)
 +}
 +
 +func (r BeamsCommandRunner) generateDelegatedIdentity(ctx context.Context, sessionID, username, identityPath string) error {

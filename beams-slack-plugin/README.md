@@ -22,12 +22,13 @@ Implemented:
 - Slash-command dispatch to the command runner
 - Private asynchronous command results through Slack
 
-The Slack integration is authenticated by Machine ID. `/beams connect` starts
-Teleport headless login and returns a private Teleport-hosted approval URL.
-The integration polls Teleport outbound for completion, verifies the Teleport
-username against the Slack mapping, creates a delegation session for the
-configured bot, discards the temporary user profile, and retains only the
-delegation session ID. No inbound callback or public container port is needed.
+The Slack integration is authenticated by Machine ID. `/beams connect` replies
+with a `tsh delegation create-session` command for the configured bot. The user
+runs it from their own signed-in terminal, then runs
+`/beams connect <delegation-session-id>`. The plugin validates the session
+through the delegation API, verifies the certificate username against the Slack
+mapping, and retains only the session ID. No inbound callback, public container
+port, or headless login is needed.
 
 Still required:
 

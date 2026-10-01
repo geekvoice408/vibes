@@ -209,36 +209,26 @@ super-grass.beams.sh:443
 
 ### Delegation flow
 
-The intended connection flow is:
+Headless login was removed (see "Resolved: Teleport v18 headless MFA"). The
+connection flow is:
 
-1. User runs `/beams connect`.
-2. The plugin starts an isolated Teleport profile for the Slack team/user pair.
-3. The plugin starts a supported headless login using:
-
-   ```bash
-   tsh ls --headless --format=json --proxy=<proxy> --user=<user>
-   ```
-
-   Teleport v18 does not support `tsh login --headless`. Headless login is only
-   enabled through commands such as `tsh ls`, `tsh ssh`, and `tsh scp`.
-
-4. The plugin extracts the `/web/headless/<request-id>` URL from `tsh` stderr.
-5. Slack receives an approval command and browser fallback.
-6. The human approves the request using their authenticated local `tsh`.
-7. The temporary user profile creates a delegation session:
+1. User runs `/beams connect`. The plugin replies with the exact command:
 
    ```bash
-   tsh delegation create-session \
-     --bot=<configured-bot-name> \
-     --allow-all \
-     --session-ttl=<configured-ttl>
+   tsh delegation create-session --proxy=<proxy> --bot=<bot_name> \
+     --allow-all --session-ttl=<delegation_ttl>
    ```
 
-8. The delegation session ID is stored under the persistent per-user profile.
-9. For each Beams command, the plugin calls Teleport's delegation API to mint a
-   short-lived certificate for the mapped human user.
-10. The plugin verifies the certificate's username and executes `tsh beams`
-    with the generated identity.
+2. The user runs it from their own terminal, where their normal `tsh login`
+   (Google SSO, any MFA) already works.
+3. The user runs `/beams connect <delegation-session-id>`.
+4. The plugin immediately calls the delegation `GenerateCerts` API with its
+   Machine ID identity to validate the session, checks the certificate username
+   matches the Slack mapping, and stores the session ID.
+5. For each Beams command, the plugin mints a short-lived certificate for the
+   mapped human user and runs `tsh beams` with it.
+
+The session ID is not a bearer secret: only the named bot can redeem it.
 
 Profiles are isolated below:
 
@@ -252,17 +242,10 @@ This directory should be backed by the Docker volume:
 beams-profiles:/var/lib/teleport-slack/beams
 ```
 
-The initiating login process is detached from the short-lived Slack request
-context and has a bounded ten-minute timeout. Before that fix, Slack could
-cancel the login process as soon as the approval URL was returned.
-
-CLI failures are now captured in a `connect-error` file and surfaced by
-`/beams status`, instead of always appearing as a fifteen-second URL timeout.
-
 ## Supported slash commands
 
 ```text
-/beams connect
+/beams connect [<delegation-session-id>]
 /beams status
 /beams ls
 /beams add [--region=<region>]
@@ -284,103 +267,18 @@ Users should use `/beams exec` for non-interactive commands.
 Commands are parsed with shellwords and executed with argument arrays, not via
 `sh -c`.
 
-## Current blocker: Teleport v18 headless MFA
+## Resolved: Teleport v18 headless MFA
 
-The headless request is created successfully and appears in Teleport Connect,
-but approval currently fails.
+Headless approval failed with
+`MFA response of type <nil> is not supported for headless authentication`.
+Teleport v18 requires a WebAuthn or SSO MFA response to approve headless
+logins, and the account only has Google SSO (no WebAuthn device), so
+`--mfa-mode=browser` (browser WebAuthn) can never succeed.
 
-Browser approval first failed with:
-
-```text
-TypeError: Cannot read properties of undefined (reading 'webauthn_response')
-```
-
-Terminal approval with browser MFA:
-
-```bash
-tsh headless approve \
-  --mfa-mode=browser \
-  --user=paul@geekvoice.net \
-  --proxy=super-grass.beams.sh:443 \
-  <request-id>
-```
-
-fails with:
-
-```text
-MFA response of type <nil> is not supported for headless authentication
-```
-
-Teleport v18's auth server requires headless approval to include either:
-
-- a WebAuthn response, or
-- an SSO response
-
-OTP and an empty response are not accepted.
-
-The account inspection showed this MFA device:
-
-```text
-Google SSO
-```
-
-No WebAuthn/passkey device was shown. Therefore `--mfa-mode=browser` is likely
-the wrong mode: in Teleport it means browser-based WebAuthn, not generic
-browser-based SSO.
-
-The next experiment is:
-
-```bash
-tsh headless approve \
-  --mfa-mode=sso \
-  --user=paul@geekvoice.net \
-  --proxy=super-grass.beams.sh:443 \
-  <request-id>
-```
-
-If this succeeds, change the generated approval command in
-`beams_commands.go` from:
-
-```text
---mfa-mode=browser
-```
-
-to:
-
-```text
---mfa-mode=sso
-```
-
-A better follow-up implementation would make the approval MFA mode
-configurable, for example:
-
-```toml
-[beams]
-mfa_mode = "sso"
-```
-
-and validate it against Teleport's supported values:
-
-```text
-auto, cross-platform, platform, otp, sso, browser
-```
-
-For headless approval, only WebAuthn, SSO, and browser WebAuthn can satisfy the
-server's phishing-resistant MFA requirement.
-
-If SSO mode also returns a nil response, inspect the Teleport tenant's
-authentication/MFA policy. At that point the headless flow may not be usable
-with this tenant configuration. The remaining designs would be:
-
-- enroll a WebAuthn/passkey device and approve with `browser`, `platform`, or
-  `cross-platform`
-- fix/enable SSO MFA challenges for headless authentication
-- restore an inbound browser callback flow
-- stop using per-user delegation and run as a service identity, which changes
-  attribution and authorization semantics
-
-The outbound-only headless flow remains the preferred architecture if SSO or
-WebAuthn approval can be made to work.
+Rather than tune MFA modes, the headless bootstrap was removed. Users create the
+delegation session from their own `tsh` and paste the ID into Slack. This
+keeps per-user consent and attribution, needs no inbound callback, and works
+with any MFA the tenant supports.
 
 ## Docker invocation
 
@@ -488,14 +386,12 @@ The current repository head when this document was created is:
 
 ## Immediate next steps
 
-1. Create a fresh request with `/beams connect`.
-2. Approve it using `--mfa-mode=sso`.
-3. If approval succeeds, update the plugin's generated approval command and
-   preferably add a configurable `beams.mfa_mode`.
-4. Confirm `/beams status` reports the delegation connection.
-5. Test `/beams ls`.
-6. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
+1. Run `/beams connect`, run the printed `tsh delegation create-session`
+   command locally, then `/beams connect <id>`.
+2. Confirm `/beams status` reports the delegation connection.
+3. Test `/beams ls`.
+4. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
    `/beams scp`, and `/beams rm`.
-7. Confirm all actions are attributed to both the human user and delegated
+5. Confirm all actions are attributed to both the human user and delegated
    workload identity in Teleport audit events.
-8. Rotate the exposed GitHub PAT.
+6. Rotate the exposed GitHub PAT.
