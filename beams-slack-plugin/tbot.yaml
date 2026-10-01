@@ -1,5 +1,5 @@
 version: v2
-proxy_server: super-grass.beams.sh:443
+proxy_server: example-beams-tenant.beams.sh:443
 onboarding:
   join_method: token
   # File containing the join token from `tctl bots instances add scotty`.

@@ -72,7 +72,12 @@ Paste the session ID (or the whole command output) into the thread. Scotty
 connects you and then carries out the request you made. This is the same
 connection `/beams connect` makes, and it lasts up to 7 days.
 
-For each request Scotty:
+Questions about which beams you have ("how many beams do I have", "list my
+beams") are answered straight from `tsh beams ls` in a second or two. Anything
+else starts a Claude Code session in a beam, which usually takes a minute or
+more; Scotty posts "On it" right away so you know it is working.
+
+For each other request Scotty:
 
 1. Picks one of your own beams: the one this thread already uses, a beam you
    named, or your newest. If you have none, it creates one, owned by you.
@@ -95,7 +100,7 @@ replies:
 > Before we can get started, you need to allow me to create beams as you. Run
 > this in a terminal where you're signed in to Teleport:
 >
-> `tsh delegation create-session --proxy=super-grass.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h`
+> `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h`
 
 Run it, then hand back the session ID it prints:
 

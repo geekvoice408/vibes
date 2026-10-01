@@ -1099,10 +1099,10 @@ index 00000000000..6a248f02381
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..794de827cde
+index 00000000000..f4d804a2315
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,287 @@
+@@ -0,0 +1,357 @@
 +package slack
 +
 +import (
@@ -1113,6 +1113,7 @@ index 00000000000..794de827cde
 +	"path/filepath"
 +	"regexp"
 +	"strings"
++	"time"
 +
 +	"github.com/gravitational/trace"
 +)
@@ -1126,6 +1127,12 @@ index 00000000000..794de827cde
 +	slackMention  = regexp.MustCompile(`<@[A-Z0-9]+>`)
 +	scottyPrefix  = regexp.MustCompile(`(?i)^\s*scotty\b[\s,:]*`)
 +	safeThreadKey = regexp.MustCompile(`^[A-Z0-9]+-[0-9.]+$`)
++
++	// Questions about which beams the user has are answered from tsh beams ls
++	// directly, without a Claude run. Requests that act on beams go to Claude.
++	beamsListQuestion = regexp.MustCompile(`(?i)\b(list|show|what|which|how many|do i have)\b`)
++	beamsPlural       = regexp.MustCompile(`(?i)\bbeams\b`)
++	beamsActionWord   = regexp.MustCompile(`(?i)\b(create|make|build|new|add|publish|unpublish|deploy|run|install|write|delete|remove|rm|start|stop|fix|update|change|set up|setup)\b`)
 +)
 +
 +// scottyRequest extracts the request from a Slack message addressed to the
@@ -1207,6 +1214,16 @@ index 00000000000..794de827cde
 +	if err != nil {
 +		return "", trace.Wrap(err)
 +	}
++	if isBeamsListQuestion(text) {
++		threadPath := filepath.Join(threadsDir, threadKey)
++		if _, err := os.Stat(threadPath); os.IsNotExist(err) {
++			if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
++				return "", trace.Wrap(err)
++			}
++		}
++		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now())), "\n\n")), nil
++	}
++
 +	// The thread file holds the thread's beam, plus "new" when Scotty switched
 +	// the thread to a beam that has no Claude conversation yet.
 +	threadPath := filepath.Join(s.profileDir, "threads", threadKey)
@@ -1295,6 +1312,59 @@ index 00000000000..794de827cde
 +		}
 +	}
 +	return s.authorizationReply("Then reply here with the session ID it prints and I'll pick up your request."), nil
++}
++
++// isBeamsListQuestion reports whether a request only asks which beams the
++// user has.
++func isBeamsListQuestion(text string) bool {
++	return beamsPlural.MatchString(text) && beamsListQuestion.MatchString(text) && !beamsActionWord.MatchString(text)
++}
++
++// formatBeamsList describes the user's beams for Slack.
++func formatBeamsList(beams []map[string]any, now time.Time) string {
++	if len(beams) == 0 {
++		return "You don't have any beams yet. Ask me to create one."
++	}
++	var b strings.Builder
++	if len(beams) == 1 {
++		b.WriteString("You have *1 beam*:")
++	} else {
++		fmt.Fprintf(&b, "You have *%d beams*:", len(beams))
++	}
++	for _, beam := range beams {
++		id, _ := beam["id"].(string)
++		fmt.Fprintf(&b, "\n• `%s`", id)
++		if region, _ := beam["region"].(string); region != "" {
++			fmt.Fprintf(&b, " (%s)", region)
++		}
++		if expires, _ := beam["expires"].(string); expires != "" {
++			if t, err := time.Parse(time.RFC3339Nano, expires); err == nil {
++				fmt.Fprintf(&b, ", expires in %s", humanDuration(t.Sub(now)))
++			}
++		}
++		if url, _ := beam["url"].(string); url != "" {
++			fmt.Fprintf(&b, ", published at %s", url)
++		}
++	}
++	return b.String()
++}
++
++func humanDuration(d time.Duration) string {
++	switch {
++	case d < time.Minute:
++		return "less than a minute"
++	case d < time.Hour:
++		return plural(int(d.Round(time.Minute)/time.Minute), "minute")
++	default:
++		return plural(int(d.Round(time.Hour)/time.Hour), "hour")
++	}
++}
++
++func plural(n int, unit string) string {
++	if n == 1 {
++		return "1 " + unit
++	}
++	return fmt.Sprintf("%d %ss", n, unit)
 +}
 +
 +// chooseBeam picks the beam for a request: the thread's beam, a beam named in
@@ -1392,10 +1462,10 @@ index 00000000000..794de827cde
 +}
 diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
 new file mode 100644
-index 00000000000..1d3d30fb4d5
+index 00000000000..439a343a0b3
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty_test.go
-@@ -0,0 +1,225 @@
+@@ -0,0 +1,271 @@
 +package slack
 +
 +import (
@@ -1404,6 +1474,7 @@ index 00000000000..1d3d30fb4d5
 +	"path/filepath"
 +	"strings"
 +	"testing"
++	"time"
 +
 +	"github.com/gravitational/trace"
 +	"github.com/stretchr/testify/require"
@@ -1620,6 +1691,51 @@ index 00000000000..1d3d30fb4d5
 +	require.NotContains(t, execs[2], "'--continue'", "first run in a newly created beam must start fresh")
 +	require.Contains(t, execs[3], "beams exec second ")
 +	require.Contains(t, execs[3], "'--continue'")
++}
++
++func TestIsBeamsListQuestion(t *testing.T) {
++	for _, text := range []string{"how many beams do i have", "list my beams", "What beams do I have?", "show beams", "which beams are running"} {
++		require.True(t, isBeamsListQuestion(text), text)
++	}
++	for _, text := range []string{"create a new beam", "what's in my beam", "make a webpage and publish it", "delete my beams", "build a site in one of my beams"} {
++		require.False(t, isBeamsListQuestion(text), text)
++	}
++}
++
++func TestFormatBeamsList(t *testing.T) {
++	now := time.Date(2026, 10, 1, 22, 0, 0, 0, time.UTC)
++	out := formatBeamsList([]map[string]any{
++		{"id": "echoing-axis", "region": "us-west-2", "expires": "2026-10-02T21:00:00.123Z"},
++		{"id": "turbo-path", "region": "us-west-2", "expires": "2026-10-01T22:30:00Z", "url": "https://turbo-path.example"},
++	}, now)
++	require.Equal(t, "You have *2 beams*:\n• `echoing-axis` (us-west-2), expires in 23 hours\n• `turbo-path` (us-west-2), expires in 30 minutes, published at https://turbo-path.example", out)
++	require.Equal(t, "You don't have any beams yet. Ask me to create one.", formatBeamsList(nil, now))
++}
++
++func TestScottyAnswersListFromTSH(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "scotty",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.000400", "how many beams do i have")
++	require.NoError(t, err)
++	require.Contains(t, out, "You have *2 beams*:")
++	require.Contains(t, out, "`mine`")
++	require.True(t, runner.FollowsThread("T1", "UALICE", "C1-1700000000.000400"))
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.NotContains(t, string(calls), "beams exec", "list questions must not start Claude")
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..b48a4703dd4 100644

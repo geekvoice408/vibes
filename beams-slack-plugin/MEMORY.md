@@ -21,7 +21,10 @@ Working end to end on the live deployment:
 - `tbot` sidecar keeping the plugin identity renewed
 
 Users own every beam created from Slack, so published URLs open for them.
-The plugin never acts on beams as its own bot identity.
+The plugin never acts on beams as its own bot identity. Verified live on
+2026-10-01: after connecting, Scotty ran Claude in the user's own beam. A
+normal Scotty request takes about a minute (a full Claude Code session in the
+beam); beam-list questions skip Claude.
 
 ## Repositories
 
@@ -125,17 +128,21 @@ Teleport v18.11.1 facts behind this design, confirmed in source:
    thread containing a UUID connects (same validation as `/beams connect`)
    and replays the pending request. If minting fails with AccessDenied or
    NotFound, the session file is removed and the user is asked again.
-3. `Ask` picks one of the user's beams: the thread's beam (then
+3. Questions only about which beams the user has (`isBeamsListQuestion`:
+   mentions "beams" plus list/show/what/which/how many, and no action verb)
+   are answered from `tsh beams ls` by `formatBeamsList` without running
+   Claude. The thread file is still created so follow-ups work.
+4. Otherwise `Ask` picks one of the user's beams: the thread's beam (then
    `claude --continue`), a beam named in the text, or the newest by expiry. If there are none it creates
    one, and the prompt tells Claude the beam is new.
-4. It runs `claude -p --dangerously-skip-permissions <prompt>` through
+5. It runs `claude -p --dangerously-skip-permissions <prompt>` through
    `tsh beams exec` as one shell-quoted string, with `claude_timeout` (15m).
-5. Claude ends its reply with `SCOTTY_ACTION: publish|unpublish|create_beam`
+6. Claude ends its reply with `SCOTTY_ACTION: publish|unpublish|create_beam`
    lines. The plugin strips those, runs the actions, and appends the results
    (for example the publish URL). `create_beam` switches the thread to the
    new beam; the thread file is marked `<beam> new` until a Claude run
    succeeds there, so the next run does not pass `--continue`.
-6. Inside a beam, Claude has preconfigured Anthropic/OpenAI credentials and
+7. Inside a beam, Claude has preconfigured Anthropic/OpenAI credentials and
    its own `tsh`. The beam's `~/AGENTS.md` says it can run
    `tsh beams publish $BEAM_ALIAS` itself. `SCOTTY_ACTION` remains as the
    path the plugin controls.
@@ -156,7 +163,7 @@ Teleport v18.11.1 facts behind this design, confirmed in source:
 - Directory `/usr/local/docker/beams-hackathon`, Compose project
   `beams-hackathon`: `volume-init`, `tbot`, and `teleport-slack`. Its
   `docker-compose.yml` matches the one in this repo.
-- Teleport tenant `super-grass.beams.sh:443`. Bot `scotty` with roles
+- Teleport tenant `example-beams-tenant.beams.sh:443`. Bot `scotty` with roles
   `access-plugin,beam-user`. `tbot` instance
   `9d773b47-bef6-4f36-b7eb-83deb955a23b` joined 2026-10-01 with token join.
 - Identity file `/var/lib/teleport-slack/identity/identity` in the plugin
@@ -204,8 +211,8 @@ was expected, broken line continuations).
 
 ## Open items
 
-1. Test the authorization flow end to end with `scotty` and confirm new beams
-   show the user as owner and that the published URL opens.
+1. Confirm a Scotty-published URL opens for its owner (Scotty already runs
+   as the user; publishing as the user is not yet verified live).
 2. Test `scp` and `unpublish` from Slack.
 3. Confirm Teleport audit events attribute delegated actions to both the human
    and `bot-scotty`.

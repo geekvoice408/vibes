@@ -1,5 +1,5 @@
 [teleport]
-addr = "super-grass.beams.sh:443"
+addr = "example-beams-tenant.beams.sh:443"
 identity = "/var/lib/teleport-slack/identity/identity"
 
 [slack]
@@ -12,7 +12,7 @@ app_token = "/var/lib/teleport/plugins/slack/slack-app-token"
 [beams]
 enabled = true
 tsh_path = "/usr/local/bin/tsh"
-proxy = "super-grass.beams.sh:443"
+proxy = "example-beams-tenant.beams.sh:443"
 plugin_identity = "/var/lib/teleport-slack/identity/identity"
 profiles_dir = "/var/lib/teleport-slack/beams"
 identity_ttl = "15m"
