@@ -50,3 +50,14 @@ git apply ../teleport.patch
 The container runs as UID/GID `10001` and stores profiles under
 `/var/lib/teleport-slack/beams`.
 
+## Automated container builds
+
+The GitHub Actions workflow at
+`.github/workflows/beams-slack-plugin-container.yml` builds pull requests and
+publishes `main` builds to:
+
+```text
+ghcr.io/geekvoice408/beams-slack-plugin
+```
+
+Published tags include `latest`, `main`, and `sha-<commit>`.
