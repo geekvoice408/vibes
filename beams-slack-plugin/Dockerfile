@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1.7
 
 ARG TELEPORT_COMMIT=1283425b60ec5f60d509ba4c791183d452923ff7
+ARG TSH_VERSION=18.11.2
 ARG GO_IMAGE=golang:1.26.7-bookworm
 
 FROM ${GO_IMAGE} AS build
 ARG TELEPORT_COMMIT
+ARG TSH_VERSION
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git \
     && rm -rf /var/lib/apt/lists/*
@@ -20,12 +22,11 @@ RUN --mount=type=cache,target=/go/pkg/mod \
       -trimpath -ldflags="-w -s" \
       -o /out/teleport-slack \
       ./integrations/access/slack/cmd/teleport-slack
-RUN --mount=type=cache,target=/go/pkg/mod \
-    --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build \
-      -trimpath -ldflags="-w -s" \
-      -o /out/tsh \
-      ./tool/tsh
+RUN curl -fsSL \
+      "https://cdn.teleport.dev/teleport-v${TSH_VERSION}-linux-amd64-bin.tar.gz" \
+      -o /tmp/teleport.tar.gz \
+    && tar -xzf /tmp/teleport.tar.gz -C /tmp \
+    && install -m 0755 /tmp/teleport/tsh /out/tsh
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -43,4 +44,3 @@ VOLUME ["/var/lib/teleport-slack/beams"]
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/teleport-slack"]
 CMD ["start", "--config=/etc/teleport-slack/config.toml"]
-

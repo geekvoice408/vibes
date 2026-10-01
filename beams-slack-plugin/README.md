@@ -4,6 +4,9 @@ Slack slash-command support for managing Teleport Beams. This project extends
 Teleport's Slack access plugin at pinned commit
 `1283425b60ec5f60d509ba4c791183d452923ff7`.
 
+The image currently pins the runtime CLI to `tsh` 18.11.2. Override the
+`TSH_VERSION` Docker build argument when upgrading the target tenant.
+
 ## Status
 
 Implemented:
