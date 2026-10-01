@@ -50,16 +50,19 @@ named in the message, or the user's newest beam, creating one if needed. It
 then runs Claude Code there with the request. Claude can ask the plugin to
 `publish`, `unpublish`, or `create_beam` by ending its reply with
 `SCOTTY_ACTION:` lines; the plugin runs them and replies in the thread with the
-published URL. Follow-ups in the same thread continue the Claude conversation.
+published URL. Follow-ups in the same thread continue the Claude conversation and need no
+mention.
 Published apps are served from port 8080 in the beam.
 
 Slack app setup for Scotty (Socket Mode needs no request URL):
 
-- Event Subscriptions: enable, then subscribe to bot events `app_mention` and
-  `message.im`; add `message.channels` (and `message.groups` for private
-  channels) only if plain `scotty ...` messages without a mention should work
-- Bot token scopes: `app_mentions:read`, `chat:write`, `im:history`, plus
-  `channels:history` / `groups:history` for the optional channel events
+- Event Subscriptions: enable, then subscribe to bot events `app_mention`,
+  `message.im`, and `message.channels` (plus `message.groups` for private
+  channels). Channel message events let thread replies continue without a
+  mention and let plain `scotty ...` messages work; the plugin ignores other
+  channel chatter.
+- Bot token scopes: `app_mentions:read`, `chat:write`, `im:history`,
+  `channels:history`, and `groups:history` for private channels
 - App Home: enable the Messages tab so users can DM the app
 - Rename the app's bot display name to `scotty`, reinstall, and invite it to
   channels where it should listen

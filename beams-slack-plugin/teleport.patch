@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..dee15ebc0f3
+index 00000000000..b1fa85b4835
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,229 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -119,6 +119,7 @@ index 00000000000..dee15ebc0f3
 +type beamsRunner interface {
 +	Run(ctx context.Context, teamID, userID, text string) (string, error)
 +	Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error)
++	FollowsThread(teamID, userID, threadKey string) bool
 +}
 +
 +// BeamsApp consumes /beams commands from Slack Socket Mode.
@@ -209,7 +210,9 @@ index 00000000000..dee15ebc0f3
 +						go a.handleSlashCommand(ctx, event)
 +					}
 +				case BeamsMessageEvent:
-+					if request, ok := scottyRequest(event); ok && a.seen.add(event.Channel+"-"+event.TS) {
++					followUp := event.EventType == "message" && event.ThreadTS != "" &&
++						a.runner.FollowsThread(event.TeamID, event.User, event.Channel+"-"+event.ThreadTS)
++					if request, ok := scottyRequest(event, followUp); ok && a.seen.add(event.Channel+"-"+event.TS) {
 +						go a.handleMessage(ctx, event, request)
 +					}
 +				}
@@ -1193,10 +1196,10 @@ index 00000000000..a5c64a678a6
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..023e1e22ee6
+index 00000000000..9b1c0e0b18a
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,208 @@
 +package slack
 +
 +import (
@@ -1222,15 +1225,16 @@ index 00000000000..023e1e22ee6
 +)
 +
 +// scottyRequest extracts the request from a Slack message addressed to the
-+// bot. Mentions and direct messages always count; other channel messages
-+// count only when they start with "scotty".
-+func scottyRequest(event BeamsMessageEvent) (string, bool) {
++// bot. Mentions, direct messages, and replies in a thread the user already
++// has with Scotty (followUp) always count; other channel messages count only
++// when they start with "scotty".
++func scottyRequest(event BeamsMessageEvent, followUp bool) (string, bool) {
 +	if event.User == "" || event.BotID != "" || event.Subtype != "" {
 +		return "", false
 +	}
 +	text := strings.TrimSpace(slackMention.ReplaceAllString(event.Text, ""))
 +	switch {
-+	case event.EventType == "app_mention", event.ChannelType == "im":
++	case event.EventType == "app_mention", event.ChannelType == "im", followUp:
 +		text = scottyPrefix.ReplaceAllString(text, "")
 +	case scottyPrefix.MatchString(event.Text):
 +		text = scottyPrefix.ReplaceAllString(event.Text, "")
@@ -1239,6 +1243,16 @@ index 00000000000..023e1e22ee6
 +	}
 +	text = strings.TrimSpace(text)
 +	return text, text != ""
++}
++
++// FollowsThread reports whether a Slack user already has a Scotty
++// conversation in the thread, so their replies there need no mention.
++func (r BeamsCommandRunner) FollowsThread(teamID, userID, threadKey string) bool {
++	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) || !safeThreadKey.MatchString(threadKey) {
++		return false
++	}
++	_, err := os.Stat(filepath.Join(r.Config.ProfilesDir, teamID, userID, "threads", threadKey))
++	return err == nil
 +}
 +
 +// Ask handles a natural-language request. It picks one of the user's beams
@@ -1396,10 +1410,10 @@ index 00000000000..023e1e22ee6
 +}
 diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
 new file mode 100644
-index 00000000000..4a90aa392d9
+index 00000000000..1cf486549c3
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty_test.go
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,98 @@
 +package slack
 +
 +import (
@@ -1412,9 +1426,10 @@ index 00000000000..4a90aa392d9
 +
 +func TestScottyRequest(t *testing.T) {
 +	for _, tc := range []struct {
-+		name  string
-+		event BeamsMessageEvent
-+		want  string
++		name     string
++		event    BeamsMessageEvent
++		followUp bool
++		want     string
 +	}{
 +		{name: "mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT> create a beam"}, want: "create a beam"},
 +		{name: "dm", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Text: "list my beams"}, want: "list my beams"},
@@ -1424,9 +1439,10 @@ index 00000000000..4a90aa392d9
 +		{name: "bot message", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", BotID: "B1", Text: "hi"}},
 +		{name: "edit", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Subtype: "message_changed", Text: "hi"}},
 +		{name: "empty mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT>"}},
++		{name: "thread follow-up", followUp: true, event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", ThreadTS: "1.2", Text: "how's that going?"}, want: "how's that going?"},
 +	} {
 +		t.Run(tc.name, func(t *testing.T) {
-+			got, ok := scottyRequest(tc.event)
++			got, ok := scottyRequest(tc.event, tc.followUp)
 +			require.Equal(t, tc.want != "", ok)
 +			require.Equal(t, tc.want, got)
 +		})
@@ -1488,6 +1504,10 @@ index 00000000000..4a90aa392d9
 +	require.Contains(t, string(calls), "beams add --no-console --format=json")
 +	require.Contains(t, string(calls), "beams publish mine --format=json")
 +	require.Contains(t, string(calls), "'--continue' 'You are Scotty")
++
++	require.True(t, runner.FollowsThread("T1", "UALICE", "C1-1700000000.000100"))
++	require.False(t, runner.FollowsThread("T1", "UALICE", "C1-1700000000.000999"))
++	require.False(t, runner.FollowsThread("T1", "UBOB", "C1-1700000000.000100"))
 +
 +	_, err = runner.Ask(ctx, "T1", "UALICE", "../escape", "hi")
 +	require.Error(t, err)
