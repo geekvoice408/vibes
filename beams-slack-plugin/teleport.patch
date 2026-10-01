@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..c99bad710df
+index 00000000000..39e488b3dda
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,166 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -97,6 +97,7 @@ index 00000000000..c99bad710df
 +	"context"
 +	"fmt"
 +	"strings"
++	"sync"
 +
 +	"github.com/gravitational/trace"
 +
@@ -155,6 +156,7 @@ index 00000000000..c99bad710df
 +		DelegationClient: delegationClient.DelegationSessionServiceClient(),
 +		LookupEmail:      a.bot.LookupEmailByUserID,
 +		Users:            baseApp.APIClient,
++		IndexMu:          &sync.Mutex{},
 +	}
 +	return nil
 +}
@@ -220,6 +222,13 @@ index 00000000000..c99bad710df
 +	)
 +	log.InfoContext(ctx, "Executing Beams slash command")
 +
++	if fields := strings.Fields(event.Text); len(fields) > 1 && fields[0] == "claude" {
++		notice := fmt.Sprintf("Running Claude Code in `%s`. This can take a few minutes.", fields[1])
++		if err := a.bot.PostBeamsReply(ctx, event.ResponseURL, notice); err != nil {
++			log.WarnContext(ctx, "Failed to post Beams progress notice", "error", err)
++		}
++	}
++
 +	output, err := a.runner.Run(ctx, event.TeamID, event.UserID, event.Text)
 +	if err != nil {
 +		output = fmt.Sprintf("Beams command failed: %s", trace.UserMessage(err))
@@ -240,10 +249,10 @@ index 00000000000..c99bad710df
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..f1613fe8b94
+index 00000000000..3dc26ae77d4
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,288 @@
+@@ -0,0 +1,613 @@
 +package slack
 +
 +import (
@@ -251,13 +260,16 @@ index 00000000000..f1613fe8b94
 +	"context"
 +	"crypto/rand"
 +	"crypto/rsa"
++	"encoding/json"
 +	"fmt"
++	"maps"
 +	"os"
 +	"os/exec"
 +	"path/filepath"
 +	"regexp"
 +	"slices"
 +	"strings"
++	"sync"
 +	"time"
 +
 +	"github.com/google/uuid"
@@ -272,12 +284,28 @@ index 00000000000..f1613fe8b94
 +	"github.com/gravitational/teleport/lib/services"
 +)
 +
-+const defaultBeamsCommandTimeout = 2 * time.Minute
++const (
++	defaultBeamsCommandTimeout = 2 * time.Minute
++	defaultClaudeTimeout       = 15 * time.Minute
++)
 +
-+var safeSlackID = regexp.MustCompile(`^[A-Z0-9]+$`)
++// defaultClaudeArgs lets Claude Code run tools without interactive approval,
++// which print mode cannot ask for. Beams are ephemeral sandbox VMs.
++var defaultClaudeArgs = []string{"--dangerously-skip-permissions"}
 +
-+// BeamsCommandRunner executes non-interactive tsh beams commands with a
-+// Teleport profile isolated to one Slack workspace/user pair.
++// botBeamsFile lists, one per line, the beams a Slack user created through the
++// shared bot identity. Teleport records the bot as their owner, so the plugin
++// uses this index to keep each user's bot-owned beams private in Slack.
++const botBeamsFile = "bot-beams"
++
++var (
++	safeSlackID = regexp.MustCompile(`^[A-Z0-9]+$`)
++	ansiEscape  = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
++)
++
++// BeamsCommandRunner executes non-interactive tsh beams commands for one Slack
++// user. Users who connected a delegation session act as their own Teleport
++// user; everyone else shares the plugin's bot identity, filtered per user.
 +type BeamsCommandRunner struct {
 +	Config           BeamsConfig
 +	DelegationClient delegationv1.DelegationSessionServiceClient
@@ -285,6 +313,19 @@ index 00000000000..f1613fe8b94
 +	LookupEmail func(ctx context.Context, userID string) (string, error)
 +	// Users reads Teleport users to authorize Slack users by role.
 +	Users services.UserOrLoginStateGetter
++	// IndexMu serializes updates to per-user bot beam indexes.
++	IndexMu *sync.Mutex
++}
++
++// beamsSession is the per-command execution context for one Slack user.
++type beamsSession struct {
++	runner      BeamsCommandRunner
++	profileDir  string
++	username    string
++	delegation  string
++	sessionPath string
++	// timeout overrides beams.command_timeout when set.
++	timeout time.Duration
 +}
 +
 +func (r BeamsCommandRunner) Run(ctx context.Context, teamID, userID, text string) (string, error) {
@@ -307,72 +348,264 @@ index 00000000000..f1613fe8b94
 +	if err != nil {
 +		return "", trace.Wrap(err)
 +	}
-+
-+	identityPath := filepath.Join(profileDir, "identity")
-+	sessionPath := filepath.Join(profileDir, "delegation-session")
-+
-+	var args []string
-+	switch words[0] {
-+	case "connect", "status":
-+		if r.Config.RunAs == BeamsRunAsBot {
-+			return fmt.Sprintf("Beams commands run as the Slack plugin's Machine ID bot on %s; no connection is needed.", r.Config.Proxy), nil
-+		}
++	s := beamsSession{
++		runner:      r,
++		profileDir:  profileDir,
++		username:    username,
++		sessionPath: filepath.Join(profileDir, "delegation-session"),
 +	}
++	if sessionID, err := os.ReadFile(s.sessionPath); err == nil {
++		s.delegation = strings.TrimSpace(string(sessionID))
++	} else if !os.IsNotExist(err) {
++		return "", trace.Wrap(err)
++	}
++
 +	switch words[0] {
 +	case "connect":
-+		if len(words) == 1 {
-+			return r.connectInstructions(), nil
-+		}
-+		if len(words) != 2 {
-+			return "", trace.BadParameter("usage: /beams connect [<delegation-session-id>]")
-+		}
-+		sessionID, err := uuid.Parse(words[1])
-+		if err != nil {
-+			return "", trace.BadParameter("invalid delegation session ID")
-+		}
-+		if err := r.generateDelegatedIdentity(ctx, sessionID.String(), username, identityPath); err != nil {
-+			return "", trace.Wrap(err, "validating delegation session")
-+		}
-+		if err := os.WriteFile(sessionPath, []byte(sessionID.String()), 0o600); err != nil {
++		return s.connect(ctx, words[1:])
++	case "disconnect":
++		if err := os.Remove(s.sessionPath); err != nil && !os.IsNotExist(err) {
 +			return "", trace.Wrap(err)
 +		}
-+		return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
++		return "Disconnected. New beams will be created by the shared bot and visible only to you in Slack.", nil
 +	case "status":
-+		if _, err := os.Stat(sessionPath); err == nil {
-+			return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
++		if s.delegation != "" {
++			return fmt.Sprintf("Connected to %s as %s. New beams are owned by your Teleport user.", r.Config.Proxy, username), nil
 +		}
-+		return "Not connected. Run `/beams connect`.", nil
++		return fmt.Sprintf("Using the shared bot on %s; your beams are visible only to you in Slack. Run `/beams connect` to own new beams as %s.", r.Config.Proxy, username), nil
 +	case "ls":
-+		args = []string{"beams", "ls", "--format=json"}
++		return s.list(ctx)
 +	case "add":
-+		args = append([]string{"beams", "add", "--no-console", "--format=json"}, words[1:]...)
++		return s.add(ctx, words[1:])
 +	case "exec", "publish", "unpublish", "rm", "scp":
-+		args = append([]string{"beams"}, words...)
++		return s.target(ctx, words)
++	case "claude":
++		return s.claude(ctx, words[1:])
 +	case "ssh":
 +		return "", trace.BadParameter("interactive SSH is unavailable in Slack; use /beams exec <name> <command>")
 +	default:
 +		return "", trace.BadParameter("unknown command %q\n%s", words[0], beamsHelp())
 +	}
++}
 +
-+	if r.Config.RunAs == BeamsRunAsBot {
-+		// tbot keeps the plugin identity renewed, so use it as-is.
-+		identityPath = r.Config.PluginIdentity
-+	} else {
-+		sessionID, err := os.ReadFile(sessionPath)
++func (s beamsSession) connect(ctx context.Context, args []string) (string, error) {
++	if s.runner.Config.BotName == "" {
++		return "", trace.BadParameter("delegation is not configured; set beams.bot_name")
++	}
++	if len(args) == 0 {
++		return s.runner.connectInstructions(), nil
++	}
++	if len(args) != 1 {
++		return "", trace.BadParameter("usage: /beams connect [<delegation-session-id>]")
++	}
++	sessionID, err := uuid.Parse(args[0])
++	if err != nil {
++		return "", trace.BadParameter("invalid delegation session ID")
++	}
++	s.delegation = sessionID.String()
++	// Minting a certificate proves the session is valid, belongs to the
++	// mapped user, and was granted to this bot.
++	_, cleanup, err := s.userIdentity(ctx)
++	if err != nil {
++		return "", trace.Wrap(err, "validating delegation session")
++	}
++	cleanup()
++	if err := os.WriteFile(s.sessionPath, []byte(s.delegation), 0o600); err != nil {
++		return "", trace.Wrap(err)
++	}
++	return fmt.Sprintf("Connected to %s as %s. New beams will be owned by your Teleport user.", s.runner.Config.Proxy, s.username), nil
++}
++
++// list shows the user's delegated beams plus the bot-owned beams they created.
++func (s beamsSession) list(ctx context.Context) (string, error) {
++	botOutput, err := s.tsh(ctx, s.runner.Config.PluginIdentity, "beams", "ls", "--format=json")
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	botBeams, err := decodeBeams(botOutput)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	owned, err := s.pruneIndex(botBeams)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	beams := filterBeams(botBeams, owned)
++
++	if s.delegation != "" {
++		identityPath, cleanup, err := s.userIdentity(ctx)
 +		if err != nil {
-+			if os.IsNotExist(err) {
-+				return "", trace.AccessDenied("not connected; run /beams connect")
-+			}
 +			return "", trace.Wrap(err)
 +		}
-+		if err := r.generateDelegatedIdentity(ctx, strings.TrimSpace(string(sessionID)), username, identityPath); err != nil {
-+			return "", trace.Wrap(err, "refreshing delegated Beams identity")
++		defer cleanup()
++		userOutput, err := s.tsh(ctx, identityPath, "beams", "ls", "--format=json")
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		userBeams, err := decodeBeams(userOutput)
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		beams = append(beams, userBeams...)
++	}
++
++	if len(beams) == 0 {
++		return "No beams. Create one with `/beams add`.", nil
++	}
++	out, err := json.MarshalIndent(beams, "", "  ")
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	return truncateSlackOutput(string(out)), nil
++}
++
++func (s beamsSession) add(ctx context.Context, args []string) (string, error) {
++	tshArgs := append([]string{"beams", "add", "--no-console", "--format=json"}, args...)
++	if s.delegation != "" {
++		identityPath, cleanup, err := s.userIdentity(ctx)
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		defer cleanup()
++		out, err := s.tsh(ctx, identityPath, tshArgs...)
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		return truncateSlackOutput(out), nil
++	}
++
++	out, err := s.tsh(ctx, s.runner.Config.PluginIdentity, tshArgs...)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	var beam struct {
++		ID string `json:"id"`
++	}
++	if err := json.Unmarshal([]byte(out), &beam); err != nil || beam.ID == "" {
++		return "", trace.BadParameter("beam was created but its name could not be read from tsh output; it is not visible in Slack")
++	}
++	if err := s.updateIndex(func(owned map[string]bool) { owned[beam.ID] = true }); err != nil {
++		return "", trace.Wrap(err)
++	}
++	return truncateSlackOutput(out), nil
++}
++
++// target runs a command that acts on named beams. Bot-owned beams are allowed
++// only when this user created them; anything else runs as the user's
++// delegated identity, where Teleport enforces ownership.
++func (s beamsSession) target(ctx context.Context, words []string) (string, error) {
++	names := beamTargets(words)
++	if len(names) == 0 {
++		return "", trace.BadParameter("usage: /beams %s <name> ...", words[0])
++	}
++	owned, err := s.readIndex()
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	botOwned := 0
++	for _, name := range names {
++		if owned[name] {
++			botOwned++
 +		}
 +	}
 +
++	tshArgs := append([]string{"beams"}, words...)
++	switch {
++	case botOwned == len(names):
++		out, err := s.tsh(ctx, s.runner.Config.PluginIdentity, tshArgs...)
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		if words[0] == "rm" {
++			if err := s.updateIndex(func(owned map[string]bool) { delete(owned, names[0]) }); err != nil {
++				return "", trace.Wrap(err)
++			}
++		}
++		return truncateSlackOutput(out), nil
++	case botOwned == 0 && s.delegation != "":
++		identityPath, cleanup, err := s.userIdentity(ctx)
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		defer cleanup()
++		out, err := s.tsh(ctx, identityPath, tshArgs...)
++		if err != nil {
++			return "", trace.Wrap(err)
++		}
++		return truncateSlackOutput(out), nil
++	case botOwned == 0:
++		return "", trace.NotFound("you have no beam named %q", names[0])
++	default:
++		return "", trace.BadParameter("cannot mix bot-owned and user-owned beams in one command")
++	}
++}
++
++// claude runs Claude Code in print mode inside a beam and returns its answer.
++func (s beamsSession) claude(ctx context.Context, args []string) (string, error) {
++	if len(args) < 2 {
++		return "", trace.BadParameter("usage: /beams claude <name> [--continue] <prompt...>")
++	}
++	name, args := args[0], args[1:]
++	extraArgs := s.runner.Config.ClaudeArgs
++	if extraArgs == nil {
++		extraArgs = defaultClaudeArgs
++	}
++	claudeArgs := append([]string{"claude", "-p"}, extraArgs...)
++	if args[0] == "--continue" || args[0] == "-c" {
++		claudeArgs = append(claudeArgs, "--continue")
++		args = args[1:]
++	}
++	if len(args) == 0 {
++		return "", trace.BadParameter("usage: /beams claude <name> [--continue] <prompt...>")
++	}
++	claudeArgs = append(claudeArgs, strings.Join(args, " "))
++
++	s.timeout = defaultClaudeTimeout
++	if s.runner.Config.ClaudeTimeout != "" {
++		timeout, err := time.ParseDuration(s.runner.Config.ClaudeTimeout)
++		if err != nil {
++			return "", trace.BadParameter("invalid beams.claude_timeout: %v", err)
++		}
++		s.timeout = timeout
++	}
++	// The remote side runs the command through a shell, so pass one quoted
++	// command string rather than separate arguments.
++	return s.target(ctx, []string{"exec", name, shellQuoteJoin(claudeArgs)})
++}
++
++// shellQuoteJoin quotes each argument for a POSIX shell.
++func shellQuoteJoin(args []string) string {
++	quoted := make([]string, len(args))
++	for i, arg := range args {
++		quoted[i] = "'" + strings.ReplaceAll(arg, "'", `'\''`) + "'"
++	}
++	return strings.Join(quoted, " ")
++}
++
++// userIdentity mints a short-lived identity for the user's delegation session
++// into a private temporary file.
++func (s beamsSession) userIdentity(ctx context.Context) (string, func(), error) {
++	f, err := os.CreateTemp(s.profileDir, "identity-*")
++	if err != nil {
++		return "", nil, trace.Wrap(err)
++	}
++	path := f.Name()
++	_ = f.Close()
++	cleanup := func() { _ = os.Remove(path) }
++	if err := s.runner.generateDelegatedIdentity(ctx, s.delegation, s.username, path); err != nil {
++		cleanup()
++		return "", nil, trace.Wrap(err, "your delegation session is no longer usable; run /beams connect again, or /beams disconnect to use the shared bot")
++	}
++	return path, cleanup, nil
++}
++
++func (s beamsSession) tsh(ctx context.Context, identityPath string, args ...string) (string, error) {
 +	timeout := defaultBeamsCommandTimeout
-+	if r.Config.CommandTTL != "" {
-+		timeout, err = time.ParseDuration(r.Config.CommandTTL)
++	if s.timeout > 0 {
++		timeout = s.timeout
++	} else if s.runner.Config.CommandTTL != "" {
++		var err error
++		timeout, err = time.ParseDuration(s.runner.Config.CommandTTL)
 +		if err != nil {
 +			return "", trace.BadParameter("invalid beams.command_timeout: %v", err)
 +		}
@@ -381,20 +614,119 @@ index 00000000000..f1613fe8b94
 +	defer cancel()
 +
 +	tshArgs := append([]string{
-+		"--proxy=" + r.Config.Proxy,
++		"--proxy=" + s.runner.Config.Proxy,
 +		"--identity=" + identityPath,
 +	}, args...)
-+	cmd := exec.CommandContext(runCtx, r.Config.TSHPath, tshArgs...)
-+	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+profileDir)
++	cmd := exec.CommandContext(runCtx, s.runner.Config.TSHPath, tshArgs...)
++	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+s.profileDir, "NO_COLOR=1")
 +	var stdout, stderr bytes.Buffer
 +	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 +	if err := cmd.Run(); err != nil {
 +		if runCtx.Err() != nil {
 +			return "", trace.LimitExceeded("command timed out")
 +		}
-+		return "", trace.Wrap(err, strings.TrimSpace(stderr.String()))
++		return "", trace.Wrap(err, stripANSI(strings.TrimSpace(stderr.String())))
 +	}
-+	return truncateSlackOutput(stdout.String()), nil
++	return stripANSI(stdout.String()), nil
++}
++
++func (s beamsSession) indexPath() string {
++	return filepath.Join(s.profileDir, botBeamsFile)
++}
++
++func (s beamsSession) readIndex() (map[string]bool, error) {
++	data, err := os.ReadFile(s.indexPath())
++	if os.IsNotExist(err) {
++		return map[string]bool{}, nil
++	}
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++	owned := map[string]bool{}
++	for _, name := range strings.Fields(string(data)) {
++		owned[name] = true
++	}
++	return owned, nil
++}
++
++func (s beamsSession) updateIndex(update func(map[string]bool)) error {
++	s.runner.IndexMu.Lock()
++	defer s.runner.IndexMu.Unlock()
++	owned, err := s.readIndex()
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	update(owned)
++	names := make([]string, 0, len(owned))
++	for name := range owned {
++		names = append(names, name)
++	}
++	slices.Sort(names)
++	return trace.Wrap(os.WriteFile(s.indexPath(), []byte(strings.Join(names, "\n")), 0o600))
++}
++
++// pruneIndex drops beams that no longer exist, such as expired ones, and
++// returns the remaining set.
++func (s beamsSession) pruneIndex(botBeams []map[string]any) (map[string]bool, error) {
++	existing := map[string]bool{}
++	for _, beam := range botBeams {
++		if id, _ := beam["id"].(string); id != "" {
++			existing[id] = true
++		}
++	}
++	var remaining map[string]bool
++	err := s.updateIndex(func(owned map[string]bool) {
++		for name := range owned {
++			if !existing[name] {
++				delete(owned, name)
++			}
++		}
++		remaining = maps.Clone(owned)
++	})
++	return remaining, trace.Wrap(err)
++}
++
++func decodeBeams(output string) ([]map[string]any, error) {
++	var beams []map[string]any
++	if strings.TrimSpace(output) == "" {
++		return nil, nil
++	}
++	if err := json.Unmarshal([]byte(output), &beams); err != nil {
++		return nil, trace.Wrap(err, "decoding tsh beams ls output")
++	}
++	return beams, nil
++}
++
++func filterBeams(beams []map[string]any, owned map[string]bool) []map[string]any {
++	var filtered []map[string]any
++	for _, beam := range beams {
++		if id, _ := beam["id"].(string); owned[id] {
++			filtered = append(filtered, beam)
++		}
++	}
++	return filtered
++}
++
++// beamTargets returns the beam names a command acts on: the first positional
++// argument, or for scp the host part of every <beam>:<path> argument.
++func beamTargets(words []string) []string {
++	var names []string
++	for _, word := range words[1:] {
++		if strings.HasPrefix(word, "-") {
++			continue
++		}
++		if words[0] != "scp" {
++			return []string{word}
++		}
++		if name, _, ok := strings.Cut(word, ":"); ok && name != "" {
++			names = append(names, name)
++		}
++	}
++	return names
++}
++
++func stripANSI(s string) string {
++	return ansiEscape.ReplaceAllString(s, "")
 +}
 +
 +// resolveUser maps a Slack user to the Teleport username it acts for. Explicit
@@ -440,7 +772,7 @@ index 00000000000..f1613fe8b94
 +		r.Config.DelegationTTL,
 +	)
 +	return fmt.Sprintf(
-+		"Authorize the %s bot from a terminal where you are signed in to Teleport:\n```%s```\n\nThen run `/beams connect <delegation-session-id>` with the ID it prints.",
++		"To own new beams as your Teleport user, authorize the %s bot from a terminal where you are signed in to Teleport:\n```%s```\n\nThen run `/beams connect <delegation-session-id>` with the ID it prints.",
 +		r.Config.BotName,
 +		createCommand,
 +	)
@@ -510,11 +842,13 @@ index 00000000000..f1613fe8b94
 +}
 +
 +func beamsHelp() string {
-+	return strings.TrimSpace(`/beams connect
++	return strings.TrimSpace(`/beams connect [<delegation-session-id>]
++/beams disconnect
 +/beams status
 +/beams ls
 +/beams add [--region=<region>]
 +/beams exec <name> <command...>
++/beams claude <name> [--continue] <prompt...>
 +/beams publish <name> [--tcp]
 +/beams unpublish <name>
 +/beams rm <name>
@@ -534,14 +868,17 @@ index 00000000000..f1613fe8b94
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..299ab5370fd
+index 00000000000..95f13f600ad
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,82 @@
+@@ -0,0 +1,167 @@
 +package slack
 +
 +import (
 +	"context"
++	"os"
++	"path/filepath"
++	"sync"
 +	"testing"
 +
 +	"github.com/gravitational/trace"
@@ -619,6 +956,88 @@ index 00000000000..299ab5370fd
 +			require.Equal(t, tc.want, got)
 +		})
 +	}
++}
++
++func TestBeamTargets(t *testing.T) {
++	require.Equal(t, []string{"crisp-array"}, beamTargets([]string{"exec", "crisp-array", "make", "-j4"}))
++	require.Equal(t, []string{"crisp-array"}, beamTargets([]string{"publish", "--tcp", "crisp-array"}))
++	require.Equal(t, []string{"a", "b"}, beamTargets([]string{"scp", "a:/x", "b:/y"}))
++	require.Empty(t, beamTargets([]string{"scp", "local", "other"}))
++	require.Empty(t, beamTargets([]string{"rm"}))
++}
++
++func TestStripANSI(t *testing.T) {
++	require.Equal(t, "ERROR: boom", stripANSI("\x1b[31mERROR:\x1b[0m boom"))
++}
++
++// writeFakeTSH installs a tsh stand-in that serves a fixed set of bot-owned
++// beams and records every invocation.
++func writeFakeTSH(t *testing.T) (tshPath, logPath string) {
++	dir := t.TempDir()
++	logPath = filepath.Join(dir, "calls")
++	tshPath = filepath.Join(dir, "tsh")
++	script := `#!/bin/sh
++echo "$@" >> ` + logPath + `
++case "$3 $4" in
++"beams ls") echo '[{"id":"mine","owner":"access-plugin"},{"id":"theirs","owner":"access-plugin"}]' ;;
++"beams add") echo '{"id":"mine","owner":"access-plugin"}' ;;
++*) echo ok ;;
++esac
++`
++	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
++	return tshPath, logPath
++}
++
++func TestBeamsBotOwnedIsolation(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:        tshPath,
++			Proxy:          "example.teleport.sh:443",
++			PluginIdentity: "/plugin-identity",
++			ProfilesDir:    t.TempDir(),
++			Users: map[string]string{
++				"UALICE": "alice@example.com",
++				"UBOB":   "bob@example.com",
++			},
++		},
++		IndexMu: &sync.Mutex{},
++	}
++	ctx := t.Context()
++
++	_, err := runner.Run(ctx, "T1", "UALICE", "add")
++	require.NoError(t, err)
++
++	out, err := runner.Run(ctx, "T1", "UALICE", "ls")
++	require.NoError(t, err)
++	require.Contains(t, out, `"mine"`)
++	require.NotContains(t, out, `"theirs"`)
++
++	out, err = runner.Run(ctx, "T1", "UBOB", "ls")
++	require.NoError(t, err)
++	require.Equal(t, "No beams. Create one with `/beams add`.", out)
++
++	_, err = runner.Run(ctx, "T1", "UBOB", "exec mine uname -a")
++	require.True(t, trace.IsNotFound(err), "expected not found, got %v", err)
++	_, err = runner.Run(ctx, "T1", "UALICE", "exec theirs uname -a")
++	require.True(t, trace.IsNotFound(err), "expected not found, got %v", err)
++
++	_, err = runner.Run(ctx, "T1", "UALICE", "exec mine uname -a")
++	require.NoError(t, err)
++	_, err = runner.Run(ctx, "T1", "UALICE", `claude mine --continue "what's failing?"`)
++	require.NoError(t, err)
++	_, err = runner.Run(ctx, "T1", "UBOB", "claude mine hello")
++	require.True(t, trace.IsNotFound(err), "expected not found, got %v", err)
++	_, err = runner.Run(ctx, "T1", "UALICE", "rm mine")
++	require.NoError(t, err)
++	_, err = runner.Run(ctx, "T1", "UALICE", "exec mine uname -a")
++	require.True(t, trace.IsNotFound(err), "expected not found after rm, got %v", err)
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.NotContains(t, string(calls), "exec theirs")
++	require.Contains(t, string(calls), "--identity=/plugin-identity beams exec mine uname -a")
++	require.Contains(t, string(calls), `beams exec mine 'claude' '-p' '--dangerously-skip-permissions' '--continue' 'what'\''s failing?'`)
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..14dd9e2c677 100644
@@ -702,10 +1121,10 @@ index d0abf811e9a..14dd9e2c677 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf6..445c018359b 100644
+index a8ecf146bf6..dbd3b760948 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,32 @@ enabled = false
+@@ -64,6 +64,37 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
@@ -713,18 +1132,23 @@ index a8ecf146bf6..445c018359b 100644
 +# Enable the /beams slash command. Each Slack user receives an isolated tsh
 +# profile directory.
 +enabled = false
-+# "bot" runs commands with the plugin's Machine ID identity, which needs the
-+# beam-user role. "user" runs them as the mapped Teleport user through a
-+# delegation session created with /beams connect.
-+run_as = "bot"
 +tsh_path = "tsh"
 +proxy = "example.teleport.sh:443"
 +plugin_identity = "/var/lib/teleport/plugins/slack/identity"
 +profiles_dir = "/var/lib/teleport-slack/beams"
 +identity_ttl = "15m"
 +command_timeout = "2m"
++# /beams claude runs Claude Code in print mode. claude_args replaces the
++# default ["--dangerously-skip-permissions"], which is needed for Claude to use
++# tools without interactive approval.
++claude_timeout = "15m"
++# Commands run as the plugin identity, which needs the beam-user role, and
++# bot-owned beams are visible only to the Slack user who created them. A user
++# who runs /beams connect instead acts as their own Teleport user. That needs
++# plugin_identity to be a tbot output for bot_name. Teleport caps delegation
++# sessions at 168h.
 +bot_name = "beams-slack"
-+delegation_ttl = "1h"
++delegation_ttl = "168h"
 +
 +# Slack users are allowed when their Slack email is a Teleport username that
 +# holds this role. Requires the users:read.email Slack scope and permission for
@@ -738,7 +1162,7 @@ index a8ecf146bf6..445c018359b 100644
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +102,4 @@ enabled = false
+@@ -76,4 +107,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -746,7 +1170,7 @@ index a8ecf146bf6..445c018359b 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..2f76f9e4089 100644
+index e27fd004c15..57455c502f9 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -758,7 +1182,7 @@ index e27fd004c15..2f76f9e4089 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,39 @@ type Config struct {
+@@ -39,12 +41,34 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -769,26 +1193,21 @@ index e27fd004c15..2f76f9e4089 100644
  	Clock               clockwork.Clock
  }
  
-+const (
-+	// BeamsRunAsBot runs Beams commands with the plugin's Machine ID identity.
-+	BeamsRunAsBot = "bot"
-+	// BeamsRunAsUser runs Beams commands as the mapped Teleport user through a
-+	// user-created delegation session.
-+	BeamsRunAsUser = "user"
-+)
-+
 +// BeamsConfig configures the /beams Slack command.
 +type BeamsConfig struct {
 +	Enabled        bool   `toml:"enabled"`
-+	RunAs          string `toml:"run_as"`
 +	TSHPath        string `toml:"tsh_path"`
 +	Proxy          string `toml:"proxy"`
 +	PluginIdentity string `toml:"plugin_identity"`
 +	ProfilesDir    string `toml:"profiles_dir"`
 +	IdentityTTL    string `toml:"identity_ttl"`
 +	CommandTTL     string `toml:"command_timeout"`
-+	BotName        string `toml:"bot_name"`
-+	DelegationTTL  string `toml:"delegation_ttl"`
++	// ClaudeTimeout bounds /beams claude runs. ClaudeArgs replaces the default
++	// extra Claude Code flags.
++	ClaudeTimeout string   `toml:"claude_timeout"`
++	ClaudeArgs    []string `toml:"claude_args"`
++	BotName       string   `toml:"bot_name"`
++	DelegationTTL string   `toml:"delegation_ttl"`
 +	// RequiredRole authorizes Slack users whose email matches a Teleport user
 +	// holding this role. Users lists explicit Slack ID overrides.
 +	RequiredRole string            `toml:"required_role"`
@@ -798,17 +1217,11 @@ index e27fd004c15..2f76f9e4089 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +160,52 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +155,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
 +	if c.Beams.Enabled {
-+		if c.Beams.RunAs == "" {
-+			c.Beams.RunAs = BeamsRunAsBot
-+		}
-+		if c.Beams.RunAs != BeamsRunAsBot && c.Beams.RunAs != BeamsRunAsUser {
-+			return trace.BadParameter("beams.run_as must be %q or %q", BeamsRunAsBot, BeamsRunAsUser)
-+		}
 +		if c.Beams.TSHPath == "" {
 +			c.Beams.TSHPath = "tsh"
 +		}
@@ -825,16 +1238,13 @@ index e27fd004c15..2f76f9e4089 100644
 +			c.Beams.IdentityTTL = "15m"
 +		}
 +		if c.Beams.DelegationTTL == "" {
-+			c.Beams.DelegationTTL = "1h"
++			c.Beams.DelegationTTL = "168h"
 +		}
 +		if c.Beams.Proxy == "" {
 +			return trace.BadParameter("missing required value beams.proxy")
 +		}
 +		if c.Beams.PluginIdentity == "" {
 +			return trace.BadParameter("missing required value beams.plugin_identity")
-+		}
-+		if c.Beams.RunAs == BeamsRunAsUser && c.Beams.BotName == "" {
-+			return trace.BadParameter("missing required value beams.bot_name")
 +		}
 +		if c.Beams.RequiredRole == "" && len(c.Beams.Users) == 0 {
 +			return trace.BadParameter("beams requires required_role or users")
@@ -851,7 +1261,7 @@ index e27fd004c15..2f76f9e4089 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +276,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +262,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

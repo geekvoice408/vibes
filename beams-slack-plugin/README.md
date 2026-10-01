@@ -14,7 +14,7 @@ Implemented:
 - Safe, shell-free `tsh beams` execution
 - Slack users authorized by Teleport role, matched by Slack email
 - Short-lived delegated identities isolated per Slack workspace and user
-- `ls`, `add`, `exec`, `publish`, `unpublish`, `rm`, and `scp`
+- `ls`, `add`, `exec`, `claude`, `publish`, `unpublish`, `rm`, and `scp`
 - Rejection of interactive `ssh`
 - Command timeouts and Slack-safe output limits
 - Container and Compose scaffolding
@@ -22,10 +22,24 @@ Implemented:
 - Slash-command dispatch to the command runner
 - Private asynchronous command results through Slack
 
-The Slack integration is authenticated by Machine ID. By default
-(`beams.run_as = "bot"`) every Beams command runs with the plugin's own Machine
-ID identity, which must hold the `beam-user` role. No `/beams connect` step is
-needed, and all allowed users share the bot's beams.
+The Slack integration is authenticated by Machine ID.
+
+By default every Beams command runs with the plugin's own identity, which must
+hold the `beam-user` role. Teleport records that identity as the beam owner, so
+the plugin keeps a per-Slack-user index of the beams each person created and
+only shows or acts on those. No setup is needed.
+
+A user who wants beams owned by their own Teleport user runs `/beams connect`.
+The plugin replies with a `tsh delegation create-session` command (up to 7
+days); after `/beams connect <delegation-session-id>`, new beams are created as
+that user. Beams created earlier through the bot remain reachable.
+`/beams disconnect` returns to the shared bot. Delegation requires
+`plugin_identity` to be a `tbot` output for `bot_name`.
+
+`/beams claude <name> [--continue] <prompt>` runs Claude Code in print mode
+inside a beam and posts its answer. It passes `--dangerously-skip-permissions`
+by default (override with `beams.claude_args`) and is bounded by
+`beams.claude_timeout`.
 
 Slack users are authorized through Teleport: the plugin reads the user's Slack
 email and allows the command when a Teleport user with that username holds
@@ -36,11 +50,6 @@ check. This needs:
 - the `users:read` and `users:read.email` Slack bot scopes
 - `read` and `list` on `user` (and optionally `user_login_state`) in the
   plugin's Teleport role
-
-With `beams.run_as = "user"`, commands instead run as the mapped Teleport user.
-`/beams connect` replies with a `tsh delegation create-session` command for the
-configured bot; the user runs it from their own signed-in terminal, then runs
-`/beams connect <delegation-session-id>`.
 
 Still required:
 

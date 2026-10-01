@@ -219,16 +219,32 @@ super-grass.beams.sh:443
 
 ### Run modes
 
-`beams.run_as` selects the identity used for `tsh beams`:
+Chosen per Slack user on every command (the `run_as` setting was removed):
 
-- `bot` (default): the plugin's Machine ID identity (`plugin_identity`) is
-  passed straight to `tsh --identity`. The bot was granted the `beam-user`
-  role. `/beams connect` and `/beams status` just report that no connection is
-  needed. All allowed Slack users share the bot's beams, and Teleport audit
-  attributes actions to the bot, not the human.
-- `user`: the delegation flow below.
+- Not connected (default): commands run with `plugin_identity`. Teleport shows
+  the bot (currently user `access-plugin`) as owner. The plugin records beams a
+  Slack user created in `<profile>/bot-beams` and only lists/targets those;
+  `ls` prunes expired names.
+- Connected (`delegation-session` file exists): new beams and `ls` use a
+  delegated identity for the user, minted into a temp file per command.
+  Bot-owned beams in the index still run as the bot.
 
-### Delegation flow (`run_as = "user"`)
+Teleport v18 facts behind this (checked in source):
+
+- SSO users cannot be impersonated (`GenerateUserCerts`).
+- Only the user can create a delegation session for themselves, with MFA;
+  max TTL 7 days.
+- Delegation `GenerateCerts` requires a bot caller (`BotName` set), so
+  delegation needs `plugin_identity` from `tbot`, not `tctl auth sign`.
+
+Current plugin identity: `tctl auth sign --user=access-plugin` (roles
+`access-plugin`, `beam-user`), allowed by role `access-plugin-impersonator`.
+It does not renew; switching to `tbot` for bot `scotty` is pending.
+
+`/beams claude <beam> [--continue] <prompt>` runs `claude -p` in the beam via
+`tsh beams exec`, as one shell-quoted string, with `claude_timeout` (15m).
+
+### Delegation flow (after `/beams connect`)
 
 Headless login was removed (see "Resolved: Teleport v18 headless MFA"). The
 connection flow is:
@@ -407,9 +423,8 @@ The current repository head when this document was created is:
 
 ## Immediate next steps
 
-1. Add the `users:read.email` Slack scope and reinstall the app; give the
-   plugin role `read`/`list` on `user`; set `required_role = "beam-user"`.
-2. Test `/beams ls` with the default `run_as = "bot"`.
+1. Test bot-mode isolation and `/beams claude` in Slack.
+2. Move `plugin_identity` to `tbot` for `scotty`, then test `/beams connect`.
 3. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
    `/beams scp`, and `/beams rm`.
 4. Rotate the exposed GitHub PAT.

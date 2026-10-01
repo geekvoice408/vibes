@@ -11,15 +11,15 @@ app_token = "/var/lib/teleport-slack/slack-app-token"
 
 [beams]
 enabled = true
-run_as = "bot"
 tsh_path = "/usr/local/bin/tsh"
 proxy = "example.teleport.sh:443"
 plugin_identity = "/var/lib/teleport-slack/plugin-identity"
 profiles_dir = "/var/lib/teleport-slack/beams"
 identity_ttl = "15m"
 command_timeout = "2m"
+claude_timeout = "15m"
 bot_name = "beams-slack"
-delegation_ttl = "1h"
+delegation_ttl = "168h"
 
 required_role = "beam-user"
 
