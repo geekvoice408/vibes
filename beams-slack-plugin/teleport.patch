@@ -239,7 +239,7 @@ index 0000000000..f33d17d298
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..fd6ea04eff
+index 0000000000..f56946e44b
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
 @@ -0,0 +1,364 @@
@@ -455,7 +455,7 @@ index 0000000000..fd6ea04eff
 +	case loginURL := <-urlCh:
 +		headlessID := filepath.Base(loginURL)
 +		approveCommand := fmt.Sprintf(
-+			"tsh headless approve --user=%s --proxy=%s %s",
++			"tsh headless approve --mfa-mode=browser --user=%s --proxy=%s %s",
 +			username,
 +			r.Config.Proxy,
 +			headlessID,
