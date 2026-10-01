@@ -1,18 +1,19 @@
 # syntax=docker/dockerfile:1.7
 
-ARG TELEPORT_COMMIT=1283425b60ec5f60d509ba4c791183d452923ff7
-ARG TSH_VERSION=18.11.2
-ARG GO_IMAGE=golang:1.26.7-bookworm
+ARG TELEPORT_REF=v18.11.1
+ARG TSH_VERSION=18.11.1
+ARG GO_IMAGE=golang:1.25.14-bookworm
 
 FROM ${GO_IMAGE} AS build
-ARG TELEPORT_COMMIT
+ARG TELEPORT_REF
 ARG TSH_VERSION
 RUN apt-get update \
     && apt-get install --no-install-recommends -y git \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN git clone --filter=blob:none https://github.com/gravitational/teleport.git . \
-    && git checkout "${TELEPORT_COMMIT}"
+    && git checkout "${TELEPORT_REF}" \
+    && test "$(git describe --tags --exact-match HEAD)" = "${TELEPORT_REF}"
 COPY teleport.patch /tmp/teleport.patch
 RUN git apply /tmp/teleport.patch
 RUN --mount=type=cache,target=/go/pkg/mod \

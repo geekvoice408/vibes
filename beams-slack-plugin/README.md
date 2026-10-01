@@ -1,10 +1,9 @@
 # Beams Slack Plugin
 
 Slack slash-command support for managing Teleport Beams. This project extends
-Teleport's Slack access plugin at pinned commit
-`1283425b60ec5f60d509ba4c791183d452923ff7`.
+Teleport's Slack access plugin at the pinned `v18.11.1` release.
 
-The image currently pins the runtime CLI to `tsh` 18.11.2. Override the
+The image currently pins the runtime CLI to `tsh` 18.11.1. Override the
 `TSH_VERSION` Docker build argument when upgrading the target tenant.
 
 ## Status
@@ -38,7 +37,7 @@ Apply it manually with:
 ```sh
 git clone https://github.com/gravitational/teleport.git
 cd teleport
-git checkout 1283425b60ec5f60d509ba4c791183d452923ff7
+git checkout v18.11.1
 git apply ../teleport.patch
 ```
 
