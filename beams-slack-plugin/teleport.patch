@@ -239,10 +239,10 @@ index 0000000000..f33d17d298
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..76d09dd86a
+index 0000000000..40f7ae5d05
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,336 @@
+@@ -0,0 +1,353 @@
 +package slack
 +
 +import (
@@ -339,7 +339,7 @@ index 0000000000..76d09dd86a
 +	sessionID, err := os.ReadFile(sessionPath)
 +	if err != nil {
 +		if os.IsNotExist(err) {
-+			return "", trace.AccessDenied("not connected; create a delegation session and run /beams connect <session-id>")
++			return "", trace.AccessDenied("not connected; run /beams connect")
 +		}
 +		return "", trace.Wrap(err)
 +	}
@@ -392,56 +392,73 @@ index 0000000000..76d09dd86a
 +		return "", trace.Wrap(err)
 +	}
 +
++	loginCtx, cancelLogin := context.WithTimeout(context.Background(), 10*time.Minute)
 +	args := []string{
-+		"login",
++		"ls",
 +		"--proxy=" + r.Config.Proxy,
 +		"--user=" + username,
 +		"--headless",
++		"--format=json",
 +	}
-+	cmd := exec.CommandContext(ctx, r.Config.TSHPath, args...)
++	cmd := exec.CommandContext(loginCtx, r.Config.TSHPath, args...)
 +	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+loginDir)
 +	stderr, err := cmd.StderrPipe()
 +	if err != nil {
++		cancelLogin()
 +		r.ConnectMu.Unlock()
 +		return "", trace.Wrap(err)
 +	}
 +	var stdout bytes.Buffer
 +	cmd.Stdout = &stdout
 +	if err := cmd.Start(); err != nil {
++		cancelLogin()
 +		r.ConnectMu.Unlock()
 +		return "", trace.Wrap(err)
 +	}
 +
 +	scanner := bufio.NewScanner(stderr)
 +	urlCh := make(chan string, 1)
++	resultCh := make(chan error, 1)
 +	go func() {
++		defer cancelLogin()
++		defer r.ConnectMu.Unlock()
++		defer os.RemoveAll(loginDir)
++
++		var stderrLines []string
 +		for scanner.Scan() {
-+			if loginURL := loginURLPattern.FindString(scanner.Text()); loginURL != "" {
++			line := scanner.Text()
++			stderrLines = append(stderrLines, line)
++			if loginURL := loginURLPattern.FindString(line); loginURL != "" {
 +				select {
 +				case urlCh <- loginURL:
 +				default:
 +				}
 +			}
 +		}
-+	}()
-+
-+	go func() {
-+		defer r.ConnectMu.Unlock()
-+		defer os.RemoveAll(loginDir)
 +		if err := cmd.Wait(); err != nil {
-+			_ = os.WriteFile(filepath.Join(profileDir, "connect-error"), []byte(err.Error()), 0o600)
++			detail := strings.TrimSpace(strings.Join(stderrLines, "\n"))
++			connectErr := trace.Wrap(err, detail)
++			_ = os.WriteFile(filepath.Join(profileDir, "connect-error"), []byte(connectErr.Error()), 0o600)
++			resultCh <- connectErr
 +			return
 +		}
-+		if err := r.finishConnect(ctx, loginDir, sessionPath, username); err != nil {
++		if err := r.finishConnect(loginCtx, loginDir, sessionPath, username); err != nil {
 +			_ = os.WriteFile(filepath.Join(profileDir, "connect-error"), []byte(err.Error()), 0o600)
++			resultCh <- err
 +			return
 +		}
 +		_ = os.Remove(filepath.Join(profileDir, "connect-error"))
++		resultCh <- nil
 +	}()
 +
 +	select {
 +	case loginURL := <-urlCh:
 +		return fmt.Sprintf("Authenticate with Teleport: %s\nAfter login completes, run `/beams status`.", loginURL), nil
++	case err := <-resultCh:
++		if err != nil {
++			return "", trace.Wrap(err, "starting Teleport headless login")
++		}
++		return fmt.Sprintf("Connected to %s as %s using Machine ID delegation.", r.Config.Proxy, username), nil
 +	case <-time.After(15 * time.Second):
 +		return "", trace.ConnectionProblem(nil, "timed out waiting for Teleport login URL")
 +	case <-ctx.Done():
