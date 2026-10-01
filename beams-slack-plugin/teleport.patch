@@ -309,10 +309,10 @@ index 00000000000..dee15ebc0f3
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..b147bd5df21
+index 00000000000..c9f309271c7
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,645 @@
+@@ -0,0 +1,670 @@
 +package slack
 +
 +import (
@@ -691,16 +691,40 @@ index 00000000000..b147bd5df21
 +	return path, cleanup, nil
 +}
 +
++// A new beam rejects SSH until Teleport assigns it a node, and tsh fails
++// immediately in that case instead of waiting, so commands retry it.
++const beamNotReady = "is not ready to accept SSH connections"
++
++var (
++	beamReadyTimeout = 3 * time.Minute
++	beamReadyPoll    = 5 * time.Second
++)
++
 +func (s beamsSession) tsh(ctx context.Context, identityPath string, args ...string) (string, error) {
++	deadline := time.Now().Add(beamReadyTimeout)
++	for {
++		out, stderr, err := s.tshOnce(ctx, identityPath, args...)
++		if err == nil || !strings.Contains(stderr, beamNotReady) || time.Now().After(deadline) {
++			return out, err
++		}
++		select {
++		case <-ctx.Done():
++			return "", trace.Wrap(ctx.Err())
++		case <-time.After(beamReadyPoll):
++		}
++	}
++}
++
++func (s beamsSession) tshOnce(ctx context.Context, identityPath string, args ...string) (stdout, stderr string, err error) {
 +	timeout := defaultBeamsCommandTimeout
 +	if s.timeout > 0 {
 +		timeout = s.timeout
 +	} else if s.runner.Config.CommandTTL != "" {
-+		var err error
-+		timeout, err = time.ParseDuration(s.runner.Config.CommandTTL)
-+		if err != nil {
-+			return "", trace.BadParameter("invalid beams.command_timeout: %v", err)
++		parsed, parseErr := time.ParseDuration(s.runner.Config.CommandTTL)
++		if parseErr != nil {
++			return "", "", trace.BadParameter("invalid beams.command_timeout: %v", parseErr)
 +		}
++		timeout = parsed
 +	}
 +	runCtx, cancel := context.WithTimeout(ctx, timeout)
 +	defer cancel()
@@ -711,15 +735,16 @@ index 00000000000..b147bd5df21
 +	}, args...)
 +	cmd := exec.CommandContext(runCtx, s.runner.Config.TSHPath, tshArgs...)
 +	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+s.profileDir, "NO_COLOR=1")
-+	var stdout, stderr bytes.Buffer
-+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
++	var outBuf, errBuf bytes.Buffer
++	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
 +	if err := cmd.Run(); err != nil {
++		stderr = stripANSI(strings.TrimSpace(errBuf.String()))
 +		if runCtx.Err() != nil {
-+			return "", trace.LimitExceeded("command timed out")
++			return "", stderr, trace.LimitExceeded("command timed out")
 +		}
-+		return "", trace.Wrap(err, stripANSI(strings.TrimSpace(stderr.String())))
++		return "", stderr, trace.Wrap(err, stderr)
 +	}
-+	return stripANSI(stdout.String()), nil
++	return stripANSI(outBuf.String()), "", nil
 +}
 +
 +func (s beamsSession) indexPath() string {
@@ -960,10 +985,10 @@ index 00000000000..b147bd5df21
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..eb91ee01714
+index 00000000000..a5c64a678a6
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,202 @@
 +package slack
 +
 +import (
@@ -972,6 +997,7 @@ index 00000000000..eb91ee01714
 +	"path/filepath"
 +	"sync"
 +	"testing"
++	"time"
 +
 +	"github.com/gravitational/trace"
 +	"github.com/stretchr/testify/require"
@@ -1132,6 +1158,38 @@ index 00000000000..eb91ee01714
 +	require.NotContains(t, string(calls), "exec theirs")
 +	require.Contains(t, string(calls), "--identity=/plugin-identity beams exec mine uname -a")
 +	require.Contains(t, string(calls), `beams exec mine 'claude' '-p' '--dangerously-skip-permissions' '--continue' 'what'\''s failing?'`)
++}
++
++func TestBeamsRetryUntilReady(t *testing.T) {
++	oldPoll := beamReadyPoll
++	beamReadyPoll = 10 * time.Millisecond
++	t.Cleanup(func() { beamReadyPoll = oldPoll })
++
++	dir := t.TempDir()
++	counter := filepath.Join(dir, "attempts")
++	tshPath := filepath.Join(dir, "tsh")
++	script := `#!/bin/sh
++n=$(cat ` + counter + ` 2>/dev/null || echo 0)
++n=$((n+1))
++echo $n > ` + counter + `
++if [ $n -le 2 ]; then
++  echo 'ERROR: beam "fresh" is not ready to accept SSH connections' >&2
++  exit 1
++fi
++echo ready
++`
++	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
++
++	s := beamsSession{
++		runner:     BeamsCommandRunner{Config: BeamsConfig{TSHPath: tshPath}},
++		profileDir: dir,
++	}
++	out, err := s.tsh(t.Context(), "/identity", "beams", "exec", "fresh", "true")
++	require.NoError(t, err)
++	require.Equal(t, "ready\n", out)
++	attempts, err := os.ReadFile(counter)
++	require.NoError(t, err)
++	require.Equal(t, "3\n", string(attempts))
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
