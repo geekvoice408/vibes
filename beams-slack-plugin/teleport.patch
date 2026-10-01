@@ -239,10 +239,10 @@ index 0000000000..f33d17d298
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..40f7ae5d05
+index 0000000000..fd6ea04eff
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,353 @@
+@@ -0,0 +1,364 @@
 +package slack
 +
 +import (
@@ -453,7 +453,18 @@ index 0000000000..40f7ae5d05
 +
 +	select {
 +	case loginURL := <-urlCh:
-+		return fmt.Sprintf("Authenticate with Teleport: %s\nAfter login completes, run `/beams status`.", loginURL), nil
++		headlessID := filepath.Base(loginURL)
++		approveCommand := fmt.Sprintf(
++			"tsh headless approve --user=%s --proxy=%s %s",
++			username,
++			r.Config.Proxy,
++			headlessID,
++		)
++		return fmt.Sprintf(
++			"Approve this login from a terminal where you are signed in to Teleport:\n```%s```\n\nBrowser fallback: %s\nAfter approval completes, run `/beams status`.",
++			approveCommand,
++			loginURL,
++		), nil
 +	case err := <-resultCh:
 +		if err != nil {
 +			return "", trace.Wrap(err, "starting Teleport headless login")
