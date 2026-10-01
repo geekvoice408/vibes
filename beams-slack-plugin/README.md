@@ -12,7 +12,7 @@ Implemented:
 
 - Slack Socket Mode parsing and acknowledgement for `slash_commands`
 - Safe, shell-free `tsh beams` execution
-- Explicit Slack user ID to Teleport username allowlist
+- Slack users authorized by Teleport role, matched by Slack email
 - Short-lived delegated identities isolated per Slack workspace and user
 - `ls`, `add`, `exec`, `publish`, `unpublish`, `rm`, and `scp`
 - Rejection of interactive `ssh`
@@ -25,8 +25,17 @@ Implemented:
 The Slack integration is authenticated by Machine ID. By default
 (`beams.run_as = "bot"`) every Beams command runs with the plugin's own Machine
 ID identity, which must hold the `beam-user` role. No `/beams connect` step is
-needed; the Slack user allowlist is the authorization boundary, and all allowed
-users share the bot's beams.
+needed, and all allowed users share the bot's beams.
+
+Slack users are authorized through Teleport: the plugin reads the user's Slack
+email and allows the command when a Teleport user with that username holds
+`beams.required_role` (default config: `beam-user`). Optional `[beams.users]`
+entries map specific Slack user IDs to Teleport usernames and skip the role
+check. This needs:
+
+- the `users:read` and `users:read.email` Slack bot scopes
+- `read` and `list` on `user` (and optionally `user_login_state`) in the
+  plugin's Teleport role
 
 With `beams.run_as = "user"`, commands instead run as the mapped Teleport user.
 `/beams connect` replies with a `tsh delegation create-session` command for the

@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..c8f67f007d0
+index 00000000000..c99bad710df
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,157 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -110,6 +110,7 @@ index 00000000000..c8f67f007d0
 +type BeamsBot interface {
 +	GenerateWebSocketURL(ctx context.Context) (string, error)
 +	PostBeamsReply(ctx context.Context, responseURL, text string) error
++	LookupEmailByUserID(ctx context.Context, userID string) (string, error)
 +}
 +
 +type beamsRunner interface {
@@ -152,6 +153,8 @@ index 00000000000..c8f67f007d0
 +	a.runner = BeamsCommandRunner{
 +		Config:           a.conf,
 +		DelegationClient: delegationClient.DelegationSessionServiceClient(),
++		LookupEmail:      a.bot.LookupEmailByUserID,
++		Users:            baseApp.APIClient,
 +	}
 +	return nil
 +}
@@ -237,10 +240,10 @@ index 00000000000..c8f67f007d0
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..6ad0f3c36ff
+index 00000000000..f1613fe8b94
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,288 @@
 +package slack
 +
 +import (
@@ -253,6 +256,7 @@ index 00000000000..6ad0f3c36ff
 +	"os/exec"
 +	"path/filepath"
 +	"regexp"
++	"slices"
 +	"strings"
 +	"time"
 +
@@ -265,6 +269,7 @@ index 00000000000..6ad0f3c36ff
 +	delegationv1 "github.com/gravitational/teleport/api/gen/proto/go/teleport/delegation/v1"
 +	"github.com/gravitational/teleport/api/identityfile"
 +	"github.com/gravitational/teleport/api/utils/keys"
++	"github.com/gravitational/teleport/lib/services"
 +)
 +
 +const defaultBeamsCommandTimeout = 2 * time.Minute
@@ -276,6 +281,10 @@ index 00000000000..6ad0f3c36ff
 +type BeamsCommandRunner struct {
 +	Config           BeamsConfig
 +	DelegationClient delegationv1.DelegationSessionServiceClient
++	// LookupEmail returns the email address of a Slack user.
++	LookupEmail func(ctx context.Context, userID string) (string, error)
++	// Users reads Teleport users to authorize Slack users by role.
++	Users services.UserOrLoginStateGetter
 +}
 +
 +func (r BeamsCommandRunner) Run(ctx context.Context, teamID, userID, text string) (string, error) {
@@ -294,9 +303,9 @@ index 00000000000..6ad0f3c36ff
 +	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 +		return "", trace.Wrap(err)
 +	}
-+	username, ok := r.Config.Users[userID]
-+	if !ok || username == "" {
-+		return "", trace.AccessDenied("your Slack account is not allowed to use Beams")
++	username, err := r.resolveUser(ctx, userID)
++	if err != nil {
++		return "", trace.Wrap(err)
 +	}
 +
 +	identityPath := filepath.Join(profileDir, "identity")
@@ -386,6 +395,38 @@ index 00000000000..6ad0f3c36ff
 +		return "", trace.Wrap(err, strings.TrimSpace(stderr.String()))
 +	}
 +	return truncateSlackOutput(stdout.String()), nil
++}
++
++// resolveUser maps a Slack user to the Teleport username it acts for. Explicit
++// beams.users entries win; otherwise the Slack email must name a Teleport user
++// holding beams.required_role.
++func (r BeamsCommandRunner) resolveUser(ctx context.Context, slackUserID string) (string, error) {
++	if username, ok := r.Config.Users[slackUserID]; ok && username != "" {
++		return username, nil
++	}
++	if r.Config.RequiredRole == "" || r.LookupEmail == nil || r.Users == nil {
++		return "", trace.AccessDenied("your Slack account is not allowed to use Beams")
++	}
++
++	email, err := r.LookupEmail(ctx, slackUserID)
++	if err != nil {
++		return "", trace.Wrap(err, "looking up Slack email (the Slack app needs users:read.email)")
++	}
++	if email == "" {
++		return "", trace.AccessDenied("your Slack profile has no email address; the Slack app needs users:read.email")
++	}
++
++	user, err := services.GetUserOrLoginState(ctx, r.Users, email)
++	if trace.IsNotFound(err) {
++		return "", trace.AccessDenied("no Teleport user %q; sign in to Teleport once, then retry", email)
++	}
++	if err != nil {
++		return "", trace.Wrap(err, "looking up Teleport user %q", email)
++	}
++	if user.IsBot() || !slices.Contains(user.GetRoles(), r.Config.RequiredRole) {
++		return "", trace.AccessDenied("Teleport user %q does not have the %q role", email, r.Config.RequiredRole)
++	}
++	return email, nil
 +}
 +
 +// connectInstructions tells the user how to authorize the Machine ID bot from
@@ -491,6 +532,94 @@ index 00000000000..6ad0f3c36ff
 +	}
 +	return s
 +}
+diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
+new file mode 100644
+index 00000000000..299ab5370fd
+--- /dev/null
++++ b/integrations/access/slack/beams_commands_test.go
+@@ -0,0 +1,82 @@
++package slack
++
++import (
++	"context"
++	"testing"
++
++	"github.com/gravitational/trace"
++	"github.com/stretchr/testify/require"
++
++	"github.com/gravitational/teleport/api/types"
++	"github.com/gravitational/teleport/api/types/userloginstate"
++)
++
++type fakeBeamsUsers map[string][]string
++
++func (f fakeBeamsUsers) GetUserLoginStates(context.Context) ([]*userloginstate.UserLoginState, error) {
++	return nil, trace.NotImplemented("not used")
++}
++
++func (f fakeBeamsUsers) ListUserLoginStates(context.Context, int, string) ([]*userloginstate.UserLoginState, string, error) {
++	return nil, "", trace.NotImplemented("not used")
++}
++
++func (f fakeBeamsUsers) GetUserLoginState(context.Context, string) (*userloginstate.UserLoginState, error) {
++	return nil, trace.NotFound("no login state")
++}
++
++func (f fakeBeamsUsers) GetUser(_ context.Context, name string, _ bool) (types.User, error) {
++	roles, ok := f[name]
++	if !ok {
++		return nil, trace.NotFound("user %q not found", name)
++	}
++	user, err := types.NewUser(name)
++	if err != nil {
++		return nil, err
++	}
++	user.SetRoles(roles)
++	return user, nil
++}
++
++func TestBeamsResolveUser(t *testing.T) {
++	emails := map[string]string{
++		"UALLOWED": "alice@example.com",
++		"UNOROLE":  "bob@example.com",
++		"UMISSING": "carol@example.com",
++		"UNOEMAIL": "",
++	}
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			RequiredRole: "beam-user",
++			Users:        map[string]string{"UOVERRIDE": "dave@example.com"},
++		},
++		LookupEmail: func(_ context.Context, userID string) (string, error) {
++			return emails[userID], nil
++		},
++		Users: fakeBeamsUsers{
++			"alice@example.com": {"access", "beam-user"},
++			"bob@example.com":   {"access"},
++		},
++	}
++
++	for _, tc := range []struct {
++		slackUserID string
++		want        string
++	}{
++		{slackUserID: "UALLOWED", want: "alice@example.com"},
++		{slackUserID: "UOVERRIDE", want: "dave@example.com"},
++		{slackUserID: "UNOROLE"},
++		{slackUserID: "UMISSING"},
++		{slackUserID: "UNOEMAIL"},
++	} {
++		t.Run(tc.slackUserID, func(t *testing.T) {
++			got, err := runner.resolveUser(t.Context(), tc.slackUserID)
++			if tc.want == "" {
++				require.True(t, trace.IsAccessDenied(err), "expected access denied, got %v", err)
++				return
++			}
++			require.NoError(t, err)
++			require.Equal(t, tc.want, got)
++		})
++	}
++}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..14dd9e2c677 100644
 --- a/integrations/access/slack/bot.go
@@ -573,10 +702,10 @@ index d0abf811e9a..14dd9e2c677 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf6..2c586511b59 100644
+index a8ecf146bf6..445c018359b 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,28 @@ enabled = false
+@@ -64,6 +64,32 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
@@ -597,15 +726,19 @@ index a8ecf146bf6..2c586511b59 100644
 +bot_name = "beams-slack"
 +delegation_ttl = "1h"
 +
-+# Explicit Slack user ID allowlist. With run_as = "user", a delegation session
-+# is accepted only when its user matches this mapping.
-+[beams.users]
-+"U0123456789" = "slack-beams-alice"
++# Slack users are allowed when their Slack email is a Teleport username that
++# holds this role. Requires the users:read.email Slack scope and permission for
++# the plugin to read users.
++required_role = "beam-user"
++
++# Optional explicit Slack user ID to Teleport username overrides.
++# [beams.users]
++# "U0123456789" = "alice@example.com"
 +
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +98,4 @@ enabled = false
+@@ -76,4 +102,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -613,7 +746,7 @@ index a8ecf146bf6..2c586511b59 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..29ef8b79458 100644
+index e27fd004c15..2f76f9e4089 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -625,7 +758,7 @@ index e27fd004c15..29ef8b79458 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,36 @@ type Config struct {
+@@ -39,12 +41,39 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -646,23 +779,26 @@ index e27fd004c15..29ef8b79458 100644
 +
 +// BeamsConfig configures the /beams Slack command.
 +type BeamsConfig struct {
-+	Enabled        bool              `toml:"enabled"`
-+	RunAs          string            `toml:"run_as"`
-+	TSHPath        string            `toml:"tsh_path"`
-+	Proxy          string            `toml:"proxy"`
-+	PluginIdentity string            `toml:"plugin_identity"`
-+	ProfilesDir    string            `toml:"profiles_dir"`
-+	IdentityTTL    string            `toml:"identity_ttl"`
-+	CommandTTL     string            `toml:"command_timeout"`
-+	BotName        string            `toml:"bot_name"`
-+	DelegationTTL  string            `toml:"delegation_ttl"`
-+	Users          map[string]string `toml:"users"`
++	Enabled        bool   `toml:"enabled"`
++	RunAs          string `toml:"run_as"`
++	TSHPath        string `toml:"tsh_path"`
++	Proxy          string `toml:"proxy"`
++	PluginIdentity string `toml:"plugin_identity"`
++	ProfilesDir    string `toml:"profiles_dir"`
++	IdentityTTL    string `toml:"identity_ttl"`
++	CommandTTL     string `toml:"command_timeout"`
++	BotName        string `toml:"bot_name"`
++	DelegationTTL  string `toml:"delegation_ttl"`
++	// RequiredRole authorizes Slack users whose email matches a Teleport user
++	// holding this role. Users lists explicit Slack ID overrides.
++	RequiredRole string            `toml:"required_role"`
++	Users        map[string]string `toml:"users"`
 +}
 +
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +157,52 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +160,52 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -700,8 +836,8 @@ index e27fd004c15..29ef8b79458 100644
 +		if c.Beams.RunAs == BeamsRunAsUser && c.Beams.BotName == "" {
 +			return trace.BadParameter("missing required value beams.bot_name")
 +		}
-+		if len(c.Beams.Users) == 0 {
-+			return trace.BadParameter("missing required value beams.users")
++		if c.Beams.RequiredRole == "" && len(c.Beams.Users) == 0 {
++			return trace.BadParameter("beams requires required_role or users")
 +		}
 +		// Slash commands arrive through Socket Mode and therefore need an app token.
 +		if c.AppTokenProvider == nil {
@@ -715,7 +851,7 @@ index e27fd004c15..29ef8b79458 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +273,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +276,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

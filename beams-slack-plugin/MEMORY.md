@@ -179,10 +179,20 @@ impersonated user can not impersonate anyone else
 The implementation was changed to use Teleport Machine ID delegation sessions
 instead of chained impersonation.
 
-### Slack user mapping
+### Slack user authorization
 
-Slack user IDs are explicitly mapped to Teleport usernames in configuration.
-The observed test mapping is:
+`resolveUser` in `beams_commands.go` decides who may run commands:
+
+1. If the Slack user ID is in `[beams.users]`, use that Teleport username.
+2. Otherwise call Slack `users.info` for the user's email (needs
+   `users:read.email`), look up the Teleport user with that username via
+   `services.GetUserOrLoginState`, and allow only if it holds
+   `beams.required_role` (e.g. `beam-user`). Bots are rejected.
+
+SSO users only exist in Teleport while their login is current; a user who has
+never signed in (or whose SSO user expired) is denied until they sign in.
+
+Observed test identity:
 
 ```text
 Slack user: U049LDB6K
@@ -397,7 +407,9 @@ The current repository head when this document was created is:
 
 ## Immediate next steps
 
-1. Test `/beams ls` with the default `run_as = "bot"`.
-2. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
+1. Add the `users:read.email` Slack scope and reinstall the app; give the
+   plugin role `read`/`list` on `user`; set `required_role = "beam-user"`.
+2. Test `/beams ls` with the default `run_as = "bot"`.
+3. Test `/beams add`, then `/beams exec`, `/beams publish`, `/beams unpublish`,
    `/beams scp`, and `/beams rm`.
-3. Rotate the exposed GitHub PAT.
+4. Rotate the exposed GitHub PAT.

@@ -21,8 +21,11 @@ command_timeout = "2m"
 bot_name = "beams-slack"
 delegation_ttl = "1h"
 
-[beams.users]
-"U0123456789" = "alice@example.com"
+required_role = "beam-user"
+
+# Optional explicit Slack user ID to Teleport username overrides.
+# [beams.users]
+# "U0123456789" = "alice@example.com"
 
 [role_to_recipients]
 "*" = ["beams-access"]
