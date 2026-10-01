@@ -227,10 +227,10 @@ index 0000000000..ae761b6ab0
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 0000000000..e777f29adb
+index 0000000000..2dce62e009
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,150 @@
 +package slack
 +
 +import (
@@ -274,16 +274,23 @@ index 0000000000..e777f29adb
 +	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 +		return "", trace.Wrap(err)
 +	}
++	username, ok := r.Config.Users[userID]
++	if !ok || username == "" {
++		return "", trace.AccessDenied("your Slack account is not allowed to use Beams")
++	}
++
++	identityPath := filepath.Join(profileDir, "identity")
++	if err := r.mintIdentity(ctx, username, identityPath); err != nil {
++		return "", trace.Wrap(err, "creating short-lived Beams identity")
++	}
 +
 +	var args []string
 +	switch words[0] {
 +	case "connect":
-+		if len(words) != 2 {
-+			return "", trace.BadParameter("usage: /beams connect <tenant>")
++		if len(words) != 1 {
++			return "", trace.BadParameter("usage: /beams connect")
 +		}
-+		// callback_url is consumed by the HTTP login coordinator in the next
-+		// layer; never silently fall back to the plugin's machine identity.
-+		return "", trace.NotImplemented("SSO login coordinator for %q at %s is not running", words[1], r.Config.CallbackURL)
++		return fmt.Sprintf("Connected to %s as %s with a short-lived impersonated identity.", r.Config.Proxy, username), nil
 +	case "ls":
 +		args = []string{"beams", "ls", "--format=json"}
 +	case "add":
@@ -306,7 +313,11 @@ index 0000000000..e777f29adb
 +	runCtx, cancel := context.WithTimeout(ctx, timeout)
 +	defer cancel()
 +
-+	cmd := exec.CommandContext(runCtx, r.Config.TSHPath, args...)
++	tshArgs := append([]string{
++		"--proxy=" + r.Config.Proxy,
++		"--identity=" + identityPath,
++	}, args...)
++	cmd := exec.CommandContext(runCtx, r.Config.TSHPath, tshArgs...)
 +	cmd.Env = append(os.Environ(), "TELEPORT_HOME="+profileDir)
 +	var stdout, stderr bytes.Buffer
 +	cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -319,8 +330,37 @@ index 0000000000..e777f29adb
 +	return truncateSlackOutput(stdout.String()), nil
 +}
 +
++func (r BeamsCommandRunner) mintIdentity(ctx context.Context, username, identityPath string) error {
++	ttl, err := time.ParseDuration(r.Config.IdentityTTL)
++	if err != nil {
++		return trace.BadParameter("invalid beams.identity_ttl: %v", err)
++	}
++	if ttl <= 0 || ttl > time.Hour {
++		return trace.BadParameter("beams.identity_ttl must be between 1s and 1h")
++	}
++
++	cmd := exec.CommandContext(ctx, r.Config.TCTLPath,
++		"--auth-server="+r.Config.Proxy,
++		"--identity="+r.Config.PluginIdentity,
++		"auth", "sign",
++		"--user="+username,
++		"--out="+identityPath,
++		"--ttl="+ttl.String(),
++		"--overwrite",
++	)
++	var stderr bytes.Buffer
++	cmd.Stderr = &stderr
++	if err := cmd.Run(); err != nil {
++		return trace.Wrap(err, strings.TrimSpace(stderr.String()))
++	}
++	if err := os.Chmod(identityPath, 0o600); err != nil {
++		return trace.Wrap(err)
++	}
++	return nil
++}
++
 +func beamsHelp() string {
-+	return strings.TrimSpace(`/beams connect <tenant>
++	return strings.TrimSpace(`/beams connect
 +/beams ls
 +/beams add [--region=<region>]
 +/beams exec <name> <command...>
@@ -423,10 +463,10 @@ index d0abf811e9..14dd9e2c67 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf..80adb88661 100644
+index a8ecf146bf..b99edd0d05 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,15 @@ enabled = false
+@@ -64,6 +64,23 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
@@ -435,14 +475,22 @@ index a8ecf146bf..80adb88661 100644
 +# profile and must authenticate to the Teleport tenant through SSO.
 +enabled = false
 +tsh_path = "tsh"
++tctl_path = "tctl"
++proxy = "example.teleport.sh:443"
++plugin_identity = "/var/lib/teleport/plugins/slack/identity"
 +profiles_dir = "/var/lib/teleport-slack/beams"
-+callback_url = "https://slack-plugin.example.com/beams/callback"
++identity_ttl = "15m"
 +command_timeout = "2m"
++
++# Explicit Slack user ID to dedicated Teleport user mapping. For hackathon
++# safety, each mapped Teleport user should have only the beam-user role.
++[beams.users]
++"U0123456789" = "slack-beams-alice"
 +
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +85,4 @@ enabled = false
+@@ -76,4 +93,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -450,7 +498,7 @@ index a8ecf146bf..80adb88661 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c1..0718d9d4c3 100644
+index e27fd004c1..3c45c49a1a 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -462,7 +510,7 @@ index e27fd004c1..0718d9d4c3 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,22 @@ type Config struct {
+@@ -39,12 +41,26 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -475,17 +523,21 @@ index e27fd004c1..0718d9d4c3 100644
  
 +// BeamsConfig configures the /beams Slack command.
 +type BeamsConfig struct {
-+	Enabled     bool   `toml:"enabled"`
-+	TSHPath     string `toml:"tsh_path"`
-+	ProfilesDir string `toml:"profiles_dir"`
-+	CallbackURL string `toml:"callback_url"`
-+	CommandTTL  string `toml:"command_timeout"`
++	Enabled        bool              `toml:"enabled"`
++	TSHPath        string            `toml:"tsh_path"`
++	TCTLPath       string            `toml:"tctl_path"`
++	Proxy          string            `toml:"proxy"`
++	PluginIdentity string            `toml:"plugin_identity"`
++	ProfilesDir    string            `toml:"profiles_dir"`
++	IdentityTTL    string            `toml:"identity_ttl"`
++	CommandTTL     string            `toml:"command_timeout"`
++	Users          map[string]string `toml:"users"`
 +}
 +
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +143,25 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +147,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -493,11 +545,29 @@ index e27fd004c1..0718d9d4c3 100644
 +		if c.Beams.TSHPath == "" {
 +			c.Beams.TSHPath = "tsh"
 +		}
++		if c.Beams.TCTLPath == "" {
++			c.Beams.TCTLPath = "tctl"
++		}
++		if c.Beams.Proxy == "" {
++			c.Beams.Proxy = c.Teleport.Addr
++		}
++		if c.Beams.PluginIdentity == "" {
++			c.Beams.PluginIdentity = c.Teleport.Identity
++		}
 +		if c.Beams.ProfilesDir == "" {
 +			c.Beams.ProfilesDir = filepath.Join(os.TempDir(), "teleport-slack-beams")
 +		}
-+		if c.Beams.CallbackURL == "" {
-+			return trace.BadParameter("missing required value beams.callback_url")
++		if c.Beams.IdentityTTL == "" {
++			c.Beams.IdentityTTL = "15m"
++		}
++		if c.Beams.Proxy == "" {
++			return trace.BadParameter("missing required value beams.proxy")
++		}
++		if c.Beams.PluginIdentity == "" {
++			return trace.BadParameter("missing required value beams.plugin_identity")
++		}
++		if len(c.Beams.Users) == 0 {
++			return trace.BadParameter("missing required value beams.users")
 +		}
 +		// Slash commands arrive through Socket Mode and therefore need an app token.
 +		if c.AppTokenProvider == nil {
@@ -511,7 +581,7 @@ index e27fd004c1..0718d9d4c3 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +232,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +254,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

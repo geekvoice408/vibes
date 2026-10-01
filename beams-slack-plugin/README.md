@@ -12,7 +12,8 @@ Implemented:
 
 - Slack Socket Mode parsing and acknowledgement for `slash_commands`
 - Safe, shell-free `tsh beams` execution
-- Isolated Teleport profile directories per Slack workspace and user
+- Explicit Slack user ID to Teleport user allowlist
+- Short-lived impersonated identities isolated per Slack workspace and user
 - `ls`, `add`, `exec`, `publish`, `unpublish`, `rm`, and `scp`
 - Rejection of interactive `ssh`
 - Command timeouts and Slack-safe output limits
@@ -21,10 +22,13 @@ Implemented:
 - Slash-command dispatch to the command runner
 - Private asynchronous command results through Slack
 
-Still required before an end-to-end Slack test:
+Mapped Teleport users should be dedicated hackathon accounts with only the
+`beam-user` role. The plugin identity must be allowed to impersonate exactly
+those users and the `beam-user` role.
 
-- Implement per-user Teleport SSO initiation and callback completion
-- Add command-runner and authentication tests
+Still required:
+
+- Add command-runner and impersonation tests
 
 ## Source layout
 
@@ -47,7 +51,7 @@ git apply ../teleport.patch
 - A Beams-enabled Teleport tenant
 - Slack Socket Mode, a `/beams` slash command, bot token, and app token
 - Persistent encrypted storage for per-user `tsh` profiles
-- A public HTTPS endpoint for the Teleport SSO callback
+- Dedicated Beams-only Teleport users for each allowed Slack user
 
 The container runs as UID/GID `10001` and stores profiles under
 `/var/lib/teleport-slack/beams`.
