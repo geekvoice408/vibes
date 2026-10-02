@@ -29,7 +29,10 @@ services:
       - ALL
 
   teleport-slack:
-    image: ghcr.io/geekvoice408/beams-slack-plugin:latest
+    # The plugin image is not published publicly. Build it from this
+    # directory, push it to a registry this host can pull from, and set
+    # BEAMS_SLACK_PLUGIN_IMAGE (see README "Build and host the image").
+    image: ${BEAMS_SLACK_PLUGIN_IMAGE:?set BEAMS_SLACK_PLUGIN_IMAGE to the plugin image you built}
     restart: unless-stopped
     depends_on:
       - tbot

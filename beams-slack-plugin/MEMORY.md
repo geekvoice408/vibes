@@ -32,8 +32,11 @@ beam); beam-list questions skip Claude.
   `beams-slack-plugin/`, branch `main`.
 - `teleport.patch` is the full diff against `gravitational/teleport`
   `v18.11.1`. CI clones Teleport at that tag, applies the patch, builds
-  `teleport-slack`, bundles `tsh` 18.11.3, and pushes
-  `ghcr.io/geekvoice408/beams-slack-plugin:{latest,main,sha-<commit>}`.
+  `teleport-slack`, bundles `tsh` 18.11.3, and pushes tags `latest`, `main`,
+  and `sha-<commit>` to a private GitHub Container Registry package. The
+  image is not publicly pullable; anyone else must build and host it
+  themselves (README "Build and host the image"). The repo's
+  `docker-compose.yml` reads the image from `BEAMS_SLACK_PLUGIN_IMAGE`.
 - Edit workflow: a throwaway `git worktree` of a local Teleport clone at
   `v18.11.1`, `git apply` the patch, `git add -N .`, edit, test, then
   regenerate with `git diff --binary v18.11.1 --output=.../teleport.patch`.

@@ -198,7 +198,28 @@ The bot's icon is [`assets/slack-beams-bot.png`](assets/slack-beams-bot.png), a
 5. Click **Save Changes**. The new icon appears on Scotty's messages and
    profile within a few minutes. No reinstall is needed for the icon.
 
-### 3. Run it
+### 3. Build and host the image
+
+The plugin image is not published publicly, so build it yourself and put it
+in a registry your Docker host can pull from (or build it on that host).
+From this directory:
+
+```sh
+docker build --platform linux/amd64 -t <registry>/beams-slack-plugin:latest .
+docker push <registry>/beams-slack-plugin:latest
+```
+
+The build clones Teleport, applies `teleport.patch`, and bundles `tsh`, so it
+takes a while. Then tell Compose which image to run:
+
+```sh
+export BEAMS_SLACK_PLUGIN_IMAGE=<registry>/beams-slack-plugin:latest
+```
+
+`docker-compose.yml` refuses to start without it. You can also put the value
+in a `.env` file next to `docker-compose.yml`.
+
+### 4. Run it
 
 From a directory containing this repo's `docker-compose.yml`, `tbot.yaml`,
 your `config.toml`, and a `secrets/` directory:
@@ -218,18 +239,18 @@ The stack has three services:
   `tbot` renews from the `tbot-state` volume afterwards. If that volume is
   lost, or `tbot` is down longer than its 1 hour certificate, create a new
   instance token.
-- `teleport-slack` is the plugin, from
-  `ghcr.io/geekvoice408/beams-slack-plugin:latest`. `secrets/` is mounted at
+- `teleport-slack` is the plugin, running the image you built and set in
+  `BEAMS_SLACK_PLUGIN_IMAGE`. `secrets/` is mounted at
   `/var/lib/teleport/plugins/slack`, and per-user state lives in the external
   `beams-profiles` volume.
 
-To deploy a new image:
+To deploy a new image, build and push it again, then:
 
 ```sh
 docker compose pull teleport-slack && docker compose up -d --no-deps teleport-slack
 ```
 
-### 4. Configuration
+### 5. Configuration
 
 Start from `config.toml.example`. The Beams settings:
 
@@ -286,10 +307,14 @@ Main files under `integrations/access/slack/`:
 
 ## Container builds
 
-`.github/workflows/beams-slack-plugin-container.yml` builds pull requests and
-publishes `main` to `ghcr.io/geekvoice408/beams-slack-plugin` with tags
-`latest`, `main`, and `sha-<commit>`. The image bundles `tsh` 18.11.3;
-override the `TSH_VERSION` build argument when the tenant is upgraded.
+The original repository has a GitHub Actions workflow
+(`.github/workflows/beams-slack-plugin-container.yml`) that builds pull
+requests and pushes `main` to a private GitHub Container Registry package with
+tags `latest`, `main`, and `sha-<commit>`. That package is not publicly
+accessible, so use your own registry as described in
+[Build and host the image](#3-build-and-host-the-image). The image bundles
+`tsh` 18.11.3; override the `TSH_VERSION` build argument when the tenant is
+upgraded.
 
 ## Versions
 
