@@ -49,7 +49,10 @@ Ask for a web page and get back a URL you can open:
 /beams disconnect
 ```
 
-- `ls` lists your beams with region, time left, and published URL.
+- `ls` lists your beams with region, time left, and published URL:
+
+  <img src="assets/screenshots/beams-ls.png" alt="/beams ls listing four beams with their regions, expiry times, and published URLs" width="720">
+
 - `exec` runs over SSH as a single shell string, so quote commands that use
   `&&`, pipes, or redirects: `/beams exec crisp-array "cd /app && make"`.
 - `claude` runs `claude -p` in the beam (15 minute limit) and posts the answer.
