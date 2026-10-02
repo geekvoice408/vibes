@@ -42,8 +42,10 @@ beam); beam-list questions skip Claude.
   `charlievieth/strcase`, which is unrelated to this code.
 - Earlier work was done by Codex in `/home/beams/work/...`. Those paths are
   obsolete.
-- `assets/scotty-icon.png` (1024 x 1024 PNG, background `#3B2A9E`) is the
+- `assets/slack-beams-bot.png` (1024 x 1024 PNG, background `#3B2A9E`) is the
   Slack app icon; README "Set Scotty's icon" has the upload steps.
+- `assets/screenshots/` holds the README screenshots. Two were edited to hide
+  the real tenant name; check new screenshots for it before adding them.
 
 ## Architecture
 

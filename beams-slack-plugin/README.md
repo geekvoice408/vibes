@@ -1,6 +1,6 @@
 # Beams Slack Plugin
 
-<img src="assets/scotty-icon.png" alt="Scotty, the Beams Slack bot" width="128" align="right">
+<img src="assets/slack-beams-bot.png" alt="Scotty, the Beams Slack bot" width="128" align="right">
 
 Manage [Teleport Beams](https://goteleport.com/) from Slack, either with a
 `/beams` slash command or by asking **Scotty** in plain language ("@scotty
@@ -25,6 +25,10 @@ and needs no inbound ports or public URL.
   own your beams, can open their published URLs, and only see your own. You
   authorize this once (up to 7 days) with a `tsh` command the plugin gives
   you.
+
+Ask for a web page and get back a URL you can open:
+
+<img src="assets/screenshots/scotty-publish-webpage.png" alt="Scotty builds a page about Seattle's Ballard neighborhood in a beam and replies with the published URL" width="560">
 
 ## Slash commands
 
@@ -79,6 +83,8 @@ beams") are answered straight from `tsh beams ls` in a second or two. Anything
 else starts a Claude Code session in a beam, which usually takes a minute or
 more; Scotty posts "On it" right away so you know it is working.
 
+<img src="assets/screenshots/scotty-list-beams.png" alt="Scotty answers 'how many beams do I have' with a list of beams, regions, and expiry times" width="560">
+
 For each other request Scotty:
 
 1. Picks one of your own beams: the one this thread already uses, a beam you
@@ -89,6 +95,10 @@ For each other request Scotty:
    `create_beam`) from outside the beam, since Claude cannot manage beams from
    inside the VM.
 4. Replies in the thread with Claude's answer and any published URL.
+
+Asking for another beam creates one, and the rest of that thread works in it:
+
+<img src="assets/screenshots/scotty-create-beam.png" alt="Scotty creates a new beam on request" width="560">
 
 Scotty cannot delete beams; use `/beams rm`.
 
@@ -103,6 +113,11 @@ replies:
 > this in a terminal where you're signed in to Teleport:
 >
 > `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h`
+
+This is how the prompt looks in reply to a slash command (the tenant name is
+hidden):
+
+<img src="assets/screenshots/beams-connect-prompt.png" alt="The plugin's private reply asking the user to run tsh delegation create-session and then /beams connect" width="720">
 
 Run it, then hand back the session ID it prints:
 
@@ -155,11 +170,14 @@ Create or update a Slack app at <https://api.slack.com/apps>:
   Set the display name to `scotty`.
 - **App icon**: see [Set Scotty's icon](#set-scottys-icon) below.
 - **Install / Reinstall to Workspace** after any scope change, then
-  `/invite` the app to the channels where it should listen.
+  `/invite` the app to the channels where it should listen. Once added, it
+  shows under the channel's **Agents & apps** tab:
+
+  <img src="assets/screenshots/slack-channel-app.png" alt="The Teleport Beams app listed under a channel's Agents and apps tab" width="480">
 
 #### Set Scotty's icon
 
-The bot's icon is [`assets/scotty-icon.png`](assets/scotty-icon.png), a
+The bot's icon is [`assets/slack-beams-bot.png`](assets/slack-beams-bot.png), a
 1024 x 1024 PNG.
 
 1. Download it. On GitHub, open the file and click **Download raw file**, or
@@ -167,7 +185,7 @@ The bot's icon is [`assets/scotty-icon.png`](assets/scotty-icon.png), a
 2. At <https://api.slack.com/apps>, open the app and go to **Basic
    Information**.
 3. Scroll to **Display Information**. Under **App icon**, click **Add App
-   Icon** (or the current icon) and upload `scotty-icon.png`. Slack accepts
+   Icon** (or the current icon) and upload `slack-beams-bot.png`. Slack accepts
    square images from 512 x 512 to 2000 x 2000 pixels.
 4. Set **Background color** to `#3B2A9E`, the icon's own purple, so it
    blends in. Set **App name** to `Scotty` and fill in a short description if
