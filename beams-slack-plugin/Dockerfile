@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 ARG TELEPORT_REF=v18.11.1
-ARG TSH_VERSION=18.11.1
+ARG TSH_VERSION=18.11.3
 ARG GO_IMAGE=golang:1.25.14-bookworm
 
 FROM ${GO_IMAGE} AS build

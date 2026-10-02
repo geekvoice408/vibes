@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..af78e8b9206
+index 00000000000..e6fef430444
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,299 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -131,14 +131,17 @@ index 00000000000..af78e8b9206
 +	job              lib.ServiceJob
 +	// seen drops duplicate deliveries of the same Slack message.
 +	seen *recentSet
++	// threads runs one Scotty request at a time per Slack thread.
++	threads *threadQueue
 +}
 +
 +// NewBeamsApp creates a Beams slash-command application.
 +func NewBeamsApp(conf BeamsConfig) *BeamsApp {
 +	app := &BeamsApp{
-+		conf:   conf,
-+		runner: BeamsCommandRunner{Config: conf},
-+		seen:   newRecentSet(1000),
++		conf:    conf,
++		runner:  BeamsCommandRunner{Config: conf},
++		seen:    newRecentSet(1000),
++		threads: newThreadQueue(),
 +	}
 +	app.job = lib.NewServiceJob(app.run)
 +	return app
@@ -250,28 +253,96 @@ index 00000000000..af78e8b9206
 +	}
 +}
 +
++// Busy-thread notice for messages that arrive while Scotty is still working.
++const scottyBusyReply = "Still working on your earlier request; I'll pick this up when it's done."
++
 +func (a *BeamsApp) handleMessage(ctx context.Context, event BeamsMessageEvent, request string) {
++	threadTS := cmp.Or(event.ThreadTS, event.TS)
++	key := event.Channel + "-" + threadTS
++	// Only one Claude run per thread: concurrent runs in the same beam would
++	// each start without the other's context. Messages that arrive meanwhile
++	// are answered right away and the newest one runs next.
++	if !a.threads.start(key, queuedMessage{event: event, request: request}) {
++		a.reply(ctx, event, threadTS, scottyBusyReply)
++		return
++	}
++	announce := true
++	for {
++		a.runMessage(ctx, event, threadTS, request, announce)
++		next, ok := a.threads.next(key)
++		if !ok {
++			return
++		}
++		event, request, announce = next.event, next.request, false
++	}
++}
++
++func (a *BeamsApp) runMessage(ctx context.Context, event BeamsMessageEvent, threadTS, request string, announce bool) {
 +	log := logger.Get(ctx).With(
 +		"slack_team_id", event.TeamID,
 +		"slack_user_id", event.User,
 +		"slack_channel_id", event.Channel,
 +	)
 +	log.InfoContext(ctx, "Handling Beams Slack message")
-+
-+	threadTS := cmp.Or(event.ThreadTS, event.TS)
-+	reply := func(text string) {
-+		if err := a.bot.PostBeamsThreadReply(ctx, event.Channel, threadTS, text); err != nil {
-+			log.ErrorContext(ctx, "Failed to post Beams thread reply", "error", err)
-+		}
++	if announce {
++		a.reply(ctx, event, threadTS, "On it. Working in your beam; this can take a few minutes.")
 +	}
-+	reply("On it. Working in your beam; this can take a few minutes.")
 +
 +	output, err := a.runner.Ask(ctx, event.TeamID, event.User, event.Channel+"-"+threadTS, request)
 +	if err != nil {
 +		output = fmt.Sprintf("Sorry, that failed: %s", trace.UserMessage(err))
 +		log.WarnContext(ctx, "Beams Slack message failed", "error", err)
 +	}
-+	reply(output)
++	a.reply(ctx, event, threadTS, output)
++}
++
++func (a *BeamsApp) reply(ctx context.Context, event BeamsMessageEvent, threadTS, text string) {
++	if err := a.bot.PostBeamsThreadReply(ctx, event.Channel, threadTS, text); err != nil {
++		logger.Get(ctx).ErrorContext(ctx, "Failed to post Beams thread reply", "error", err, "slack_channel_id", event.Channel)
++	}
++}
++
++type queuedMessage struct {
++	event   BeamsMessageEvent
++	request string
++}
++
++// threadQueue tracks which threads have a Scotty request running and keeps
++// the newest message that arrived for each while it ran.
++type threadQueue struct {
++	mu      sync.Mutex
++	running map[string]*queuedMessage
++}
++
++func newThreadQueue() *threadQueue {
++	return &threadQueue{running: make(map[string]*queuedMessage)}
++}
++
++// start marks the thread busy and reports true if nothing was running there.
++// Otherwise it queues msg, replacing any older queued message, and reports
++// false.
++func (q *threadQueue) start(key string, msg queuedMessage) bool {
++	q.mu.Lock()
++	defer q.mu.Unlock()
++	if _, busy := q.running[key]; busy {
++		q.running[key] = &msg
++		return false
++	}
++	q.running[key] = nil
++	return true
++}
++
++// next returns the message queued while the last run was in progress, or
++// marks the thread idle when there is none.
++func (q *threadQueue) next(key string) (queuedMessage, bool) {
++	q.mu.Lock()
++	defer q.mu.Unlock()
++	if msg := q.running[key]; msg != nil {
++		q.running[key] = nil
++		return *msg, true
++	}
++	delete(q.running, key)
++	return queuedMessage{}, false
 +}
 +
 +// recentSet remembers a bounded number of recent keys.
@@ -309,9 +380,112 @@ index 00000000000..af78e8b9206
 +	}
 +	return "```" + output + "```"
 +}
+diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
+new file mode 100644
+index 00000000000..de8abc00554
+--- /dev/null
++++ b/integrations/access/slack/beams_app_test.go
+@@ -0,0 +1,97 @@
++package slack
++
++import (
++	"context"
++	"sync"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++type fakeScottyBot struct {
++	mu      sync.Mutex
++	replies []string
++}
++
++func (b *fakeScottyBot) GenerateWebSocketURL(context.Context) (string, error) { return "", nil }
++func (b *fakeScottyBot) PostBeamsReply(context.Context, string, string) error { return nil }
++func (b *fakeScottyBot) LookupEmailByUserID(context.Context, string) (string, error) {
++	return "", nil
++}
++
++func (b *fakeScottyBot) PostBeamsThreadReply(_ context.Context, _, _, text string) error {
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	b.replies = append(b.replies, text)
++	return nil
++}
++
++// blockingRunner holds the request "first" until release is closed.
++type blockingRunner struct {
++	mu      sync.Mutex
++	asks    []string
++	started chan string
++	release chan struct{}
++}
++
++func (r *blockingRunner) Run(context.Context, string, string, string) (string, error) {
++	return "", nil
++}
++func (r *blockingRunner) FollowsThread(string, string, string) bool { return true }
++
++func (r *blockingRunner) Ask(_ context.Context, _, _, _, text string) (string, error) {
++	r.mu.Lock()
++	r.asks = append(r.asks, text)
++	r.mu.Unlock()
++	r.started <- text
++	if text == "first" {
++		<-r.release
++	}
++	return "answer to " + text, nil
++}
++
++func TestScottyOneRequestPerThread(t *testing.T) {
++	bot := &fakeScottyBot{}
++	runner := &blockingRunner{started: make(chan string, 10), release: make(chan struct{})}
++	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
++	ctx := t.Context()
++	event := BeamsMessageEvent{TeamID: "T1", User: "U1", Channel: "C1", TS: "1.1"}
++
++	done := make(chan struct{})
++	go func() {
++		app.handleMessage(ctx, event, "first")
++		close(done)
++	}()
++	require.Equal(t, "first", <-runner.started)
++
++	// Messages that arrive mid-run are acknowledged and only the newest runs.
++	followUp := event
++	followUp.ThreadTS, followUp.TS = "1.1", "1.2"
++	app.handleMessage(ctx, followUp, "hows it going?")
++	followUp.TS = "1.3"
++	app.handleMessage(ctx, followUp, "is it ready yet?")
++
++	close(runner.release)
++	<-done
++
++	require.Equal(t, []string{"first", "is it ready yet?"}, runner.asks)
++	require.Equal(t, []string{
++		"On it. Working in your beam; this can take a few minutes.",
++		scottyBusyReply,
++		scottyBusyReply,
++		"answer to first",
++		"answer to is it ready yet?",
++	}, bot.replies)
++
++	// The thread is idle again, so the next message starts normally.
++	followUp.TS = "1.4"
++	app.handleMessage(ctx, followUp, "thanks")
++	require.Equal(t, "thanks", runner.asks[len(runner.asks)-1])
++	require.Equal(t, "On it. Working in your beam; this can take a few minutes.", bot.replies[len(bot.replies)-2])
++
++	// Other threads are not blocked by a busy one.
++	q := newThreadQueue()
++	require.True(t, q.start("C1-1.1", queuedMessage{}))
++	require.True(t, q.start("C1-2.2", queuedMessage{}))
++	require.False(t, q.start("C1-1.1", queuedMessage{request: "later"}))
++}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..644b97569af
+index 00000000000..ac897ab0861
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
 @@ -0,0 +1,572 @@
@@ -351,7 +525,7 @@ index 00000000000..644b97569af
 +)
 +
 +// defaultClaudeArgs lets Claude Code run tools without interactive approval,
-+// which print mode cannot ask for. Beams are ephemeral sandbox VMs.
++// which print mode cannot ask for. Beams are ephemeral runtimes.
 +var defaultClaudeArgs = []string{"--dangerously-skip-permissions"}
 +
 +var (
@@ -1099,7 +1273,7 @@ index 00000000000..6a248f02381
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..f4d804a2315
+index 00000000000..2910b8d77ae
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
 @@ -0,0 +1,357 @@
@@ -1395,12 +1569,12 @@ index 00000000000..f4d804a2315
 +
 +func scottyPrompt(beam, username string, created bool, request string) string {
 +	var b strings.Builder
-+	fmt.Fprintf(&b, "You are Scotty, a Slack assistant working inside the Teleport Beam %q, an ephemeral Debian sandbox VM, on behalf of %s.", beam, username)
++	fmt.Fprintf(&b, "You are Scotty, a Slack assistant working inside the Teleport Beam %q, an ephemeral Debian runtime, on behalf of %s.", beam, username)
 +	if created {
 +		b.WriteString(" This beam was just created for this request.")
 +	}
 +	b.WriteString(`
-+Carry out the request below in this VM. Your final reply is posted to Slack, so keep it short and use Slack formatting.
++Carry out the request below in this runtime. Your final reply is posted to Slack, so keep it short and use Slack formatting. Reply to the user directly: do not restate their request or explain these instructions. If you mention this environment, call it a runtime, not a sandbox.
 +To share a web page or service, serve it on port 8080 on 0.0.0.0 in the background so it keeps running after you exit (for example with nohup or tmux), then request publishing.
 +You cannot manage beams yourself. To have the Slack bot act for you, end your reply with one line per action:
 +` + scottyActionPrefix + ` publish

@@ -32,12 +32,15 @@ beam); beam-list questions skip Claude.
   `beams-slack-plugin/`, branch `main`.
 - `teleport.patch` is the full diff against `gravitational/teleport`
   `v18.11.1`. CI clones Teleport at that tag, applies the patch, builds
-  `teleport-slack`, bundles `tsh` 18.11.1, and pushes
+  `teleport-slack`, bundles `tsh` 18.11.3, and pushes
   `ghcr.io/geekvoice408/beams-slack-plugin:{latest,main,sha-<commit>}`.
 - Edit workflow: a throwaway `git worktree` of a local Teleport clone at
   `v18.11.1`, `git apply` the patch, `git add -N .`, edit, test, then
   regenerate with `git diff --binary v18.11.1 --output=.../teleport.patch`.
   Exact commands are in `README.md` under Development.
+- Versions: source `v18.11.1`, bundled `tsh` 18.11.3, `tbot` 18.11.3.
+  18.11.3 binaries are published but GitHub has no `v18.11.3` (or `v18.11.2`)
+  tag, so the patch stays on `v18.11.1` until a newer public tag exists.
 - Run tests with `GOTOOLCHAIN=go1.25.14`. Go 1.27 crashes at init inside
   `charlievieth/strcase`, which is unrelated to this code.
 - Earlier work was done by Codex in `/home/beams/work/...`. Those paths are
@@ -59,6 +62,11 @@ beam); beam-list questions skip Claude.
 - `events_api` envelopes (`app_mention`, `message.*`) become
   `BeamsMessageEvent`. Scotty replies in a thread with `chat.postMessage`.
 - Duplicate deliveries are dropped by `channel-ts` (`recentSet`, last 1000).
+- `threadQueue` allows one Scotty run per thread. Messages arriving mid-run
+  get "Still working on your earlier request" and only the newest is kept;
+  it runs (with `--continue`) when the current run ends. Before this,
+  follow-ups started overlapping Claude runs in the same beam with no shared
+  context.
 
 ### Authorization (`resolveUser` in `beams_commands.go`)
 
@@ -141,6 +149,8 @@ Teleport v18.11.1 facts behind this design, confirmed in source:
    one, and the prompt tells Claude the beam is new.
 5. It runs `claude -p --dangerously-skip-permissions <prompt>` through
    `tsh beams exec` as one shell-quoted string, with `claude_timeout` (15m).
+   The prompt calls the beam an "ephemeral Debian runtime" (never "sandbox")
+   and tells Claude to reply directly without restating the request.
 6. Claude ends its reply with `SCOTTY_ACTION: publish|unpublish|create_beam`
    lines. The plugin strips those, runs the actions, and appends the results
    (for example the publish URL). `create_beam` switches the thread to the
@@ -239,5 +249,5 @@ was expected, broken line continuations).
   and the audit log apply per person. The Slack email-to-Teleport-user match
   is what decides whose delegation session a Slack user can use.
 - Claude runs in beams with `--dangerously-skip-permissions`. That is
-  acceptable because beams are throwaway sandbox VMs, but anything a beam can
+  acceptable because beams are throwaway runtimes, but anything a beam can
   reach is reachable by whoever controls the prompt.

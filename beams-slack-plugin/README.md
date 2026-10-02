@@ -6,8 +6,10 @@ Manage [Teleport Beams](https://goteleport.com/) from Slack, either with a
 `/beams` slash command or by asking **Scotty** in plain language ("@scotty
 make a webpage about things to do in Seattle and publish it").
 
-It is Teleport's Slack access plugin (pinned to `v18.11.1`) with a Beams app
-added. It runs as a container next to `tbot`, talks to Slack over Socket Mode,
+It is Teleport's Slack access plugin with a Beams app added. It is built from
+the Teleport `v18.11.1` source (the newest public v18.11 tag) and ships with
+`tsh` 18.11.3; the `tbot` sidecar runs 18.11.3 too. See
+[Versions](#versions). It runs as a container next to `tbot`, talks to Slack over Socket Mode,
 and needs no inbound ports or public URL.
 
 ## What it does
@@ -81,7 +83,10 @@ connection `/beams connect` makes, and it lasts up to 7 days.
 Questions about which beams you have ("how many beams do I have", "list my
 beams") are answered straight from `tsh beams ls` in a second or two. Anything
 else starts a Claude Code session in a beam, which usually takes a minute or
-more; Scotty posts "On it" right away so you know it is working.
+more; Scotty posts "On it" right away so you know it is working. Scotty works
+on one request per thread at a time: if you send another message while it is
+busy, it replies "Still working on your earlier request" and handles your
+newest message as soon as the current one finishes.
 
 <img src="assets/screenshots/scotty-list-beams.png" alt="Scotty answers 'how many beams do I have' with a list of beams, regions, and expiry times" width="560">
 
@@ -242,7 +247,7 @@ Start from `config.toml.example`. The Beams settings:
 | `identity_ttl` | `15m` | Lifetime of per-command delegated certificates (max 1h) |
 | `command_timeout` | `2m` | Limit for normal commands |
 | `claude_timeout` | `15m` | Limit for `/beams claude` and Scotty |
-| `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags. Print mode cannot ask for tool approval, and beams are throwaway sandbox VMs. |
+| `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags. Print mode cannot ask for tool approval, and beams are throwaway runtimes. |
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.
@@ -283,5 +288,18 @@ Main files under `integrations/access/slack/`:
 
 `.github/workflows/beams-slack-plugin-container.yml` builds pull requests and
 publishes `main` to `ghcr.io/geekvoice408/beams-slack-plugin` with tags
-`latest`, `main`, and `sha-<commit>`. The image bundles `tsh` 18.11.1;
+`latest`, `main`, and `sha-<commit>`. The image bundles `tsh` 18.11.3;
 override the `TSH_VERSION` build argument when the tenant is upgraded.
+
+## Versions
+
+| Piece | Version | Set in |
+| --- | --- | --- |
+| Plugin source (`teleport.patch` base) | `v18.11.1` | `Dockerfile` `TELEPORT_REF` |
+| Bundled `tsh` | 18.11.3 | `Dockerfile` `TSH_VERSION` |
+| `tbot` sidecar | 18.11.3 | `docker-compose.yml` |
+
+Teleport published 18.11.3 binaries without a public `v18.11.3` source tag,
+so the plugin is built from `v18.11.1`, the newest tag available. Mixing patch
+releases within 18.11 is supported. Move `TELEPORT_REF` (and rebase
+`teleport.patch`) when a newer tag is published.

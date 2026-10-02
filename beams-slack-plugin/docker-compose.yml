@@ -11,7 +11,7 @@ services:
     restart: "no"
 
   tbot:
-    image: public.ecr.aws/gravitational/tbot-distroless:18.11.1
+    image: public.ecr.aws/gravitational/tbot-distroless:18.11.3
     command: ["start", "-c", "/etc/tbot.yaml"]
     user: "10001:10001"
     restart: unless-stopped
