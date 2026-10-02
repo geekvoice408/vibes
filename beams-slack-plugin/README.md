@@ -49,6 +49,7 @@ Ask for a web page and get back a URL you can open:
 /beams disconnect
 ```
 
+- `ls` lists your beams with region, time left, and published URL.
 - `exec` runs over SSH as a single shell string, so quote commands that use
   `&&`, pipes, or redirects: `/beams exec crisp-array "cd /app && make"`.
 - `claude` runs `claude -p` in the beam (15 minute limit) and posts the answer.
@@ -71,10 +72,11 @@ Talk to Scotty in any of these ways:
 
 The first time (and again when your authorization expires), Scotty replies:
 
-> Before we can get started, you need to allow me to create beams as you. Run
-> this in a terminal where you're signed in to Teleport: `tsh delegation
-> create-session ...` Then reply here with the session ID it prints and I'll
-> pick up your request.
+> **Before we can get started, you need to allow me to create beams as you.**
+>
+> 1. Run this in a terminal where you're signed in to Teleport:
+>    `tsh delegation create-session ...`
+> 2. Reply here with the session ID it prints and I'll pick up your request.
 
 Paste the session ID (or the whole command output) into the thread. Scotty
 connects you and then carries out the request you made. This is the same
@@ -114,10 +116,11 @@ create a delegation session for yourself (with MFA). So the first time you use
 `/beams` or Scotty, and again when your authorization expires, the plugin
 replies:
 
-> Before we can get started, you need to allow me to create beams as you. Run
-> this in a terminal where you're signed in to Teleport:
+> **Before we can get started, you need to allow me to create beams as you.**
 >
-> `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h`
+> 1. Run this in a terminal where you're signed in to Teleport:
+>    `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h`
+> 2. Run `/beams connect <session-id>` with the ID it prints.
 
 This is how the prompt looks in reply to a slash command (the tenant name is
 hidden):

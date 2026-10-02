@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..e6fef430444
+index 00000000000..bdb2845bae0
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,299 @@
+@@ -0,0 +1,291 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -248,7 +248,7 @@ index 00000000000..e6fef430444
 +		log.WarnContext(ctx, "Beams slash command failed", "error", err)
 +	}
 +
-+	if err := a.bot.PostBeamsReply(ctx, event.ResponseURL, formatBeamsReply(output)); err != nil {
++	if err := a.bot.PostBeamsReply(ctx, event.ResponseURL, strings.TrimSpace(output)); err != nil {
 +		log.ErrorContext(ctx, "Failed to post Beams command response", "error", err)
 +	}
 +}
@@ -372,14 +372,6 @@ index 00000000000..e6fef430444
 +	}
 +	return true
 +}
-+
-+func formatBeamsReply(output string) string {
-+	output = strings.TrimSpace(output)
-+	if strings.HasPrefix(output, "/beams ") || !strings.Contains(output, "\n") {
-+		return output
-+	}
-+	return "```" + output + "```"
-+}
 diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
 new file mode 100644
 index 00000000000..de8abc00554
@@ -485,10 +477,10 @@ index 00000000000..de8abc00554
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..ac897ab0861
+index 00000000000..e20b5fb36fe
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,572 @@
+@@ -0,0 +1,577 @@
 +package slack
 +
 +import (
@@ -596,17 +588,20 @@ index 00000000000..ac897ab0861
 +		out, err = s.list(ctx)
 +	case "add":
 +		out, err = s.add(ctx, words[1:])
++		out = codeBlock(out)
 +	case "exec", "publish", "unpublish", "rm", "scp":
 +		out, err = s.target(ctx, words)
++		out = codeBlock(out)
 +	case "claude":
 +		out, err = s.claude(ctx, words[1:])
++		out = codeBlock(out)
 +	case "ssh":
 +		return "", trace.BadParameter("interactive SSH is unavailable in Slack; use /beams exec <name> <command>")
 +	default:
 +		return "", trace.BadParameter("unknown command %q\n%s", words[0], beamsHelp())
 +	}
 +	if needsAuthorization(err) {
-+		return s.authorizationReply("Then run `/beams connect <session-id>` with the ID it prints."), nil
++		return s.authorizationReply("Run `/beams connect <session-id>` with the ID it prints."), nil
 +	}
 +	return out, err
 +}
@@ -629,7 +624,7 @@ index 00000000000..ac897ab0861
 +	prefix := ""
 +	if s.delegation != "" {
 +		_ = os.Remove(s.sessionPath)
-+		prefix = "Your authorization has expired. "
++		prefix = "Your authorization has expired.\n"
 +	}
 +	return s.runner.authorizationMessage(prefix, next)
 +}
@@ -667,7 +662,7 @@ index 00000000000..ac897ab0861
 +		return "", trace.BadParameter("delegation is not configured; set beams.bot_name")
 +	}
 +	if len(args) == 0 {
-+		return s.runner.authorizationMessage("", "Then run `/beams connect <session-id>` with the ID it prints."), nil
++		return s.runner.authorizationMessage("", "Run `/beams connect <session-id>` with the ID it prints."), nil
 +	}
 +	if len(args) != 1 {
 +		return "", trace.BadParameter("usage: /beams connect [<delegation-session-id>]")
@@ -714,14 +709,7 @@ index 00000000000..ac897ab0861
 +	if err != nil {
 +		return "", trace.Wrap(err)
 +	}
-+	if len(beams) == 0 {
-+		return "No beams. Create one with `/beams add`.", nil
-+	}
-+	out, err := json.MarshalIndent(beams, "", "  ")
-+	if err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+	return truncateSlackOutput(string(out)), nil
++	return truncateSlackOutput(formatBeamsList(beams, time.Now(), "You don't have any beams yet. Create one with `/beams add`.")), nil
 +}
 +
 +func (s beamsSession) add(ctx context.Context, args []string) (string, error) {
@@ -916,6 +904,15 @@ index 00000000000..ac897ab0861
 +	return names
 +}
 +
++// codeBlock shows multi-line tsh output as a Slack code block.
++func codeBlock(output string) string {
++	output = strings.TrimSpace(output)
++	if !strings.Contains(output, "\n") {
++		return output
++	}
++	return "```" + output + "```"
++}
++
 +func stripANSI(s string) string {
 +	return ansiEscape.ReplaceAllString(s, "")
 +}
@@ -956,7 +953,7 @@ index 00000000000..ac897ab0861
 +// says how to give the session ID back.
 +func (r BeamsCommandRunner) authorizationMessage(prefix, next string) string {
 +	return fmt.Sprintf(
-+		"%sBefore we can get started, you need to allow me to create beams as you. Run this in a terminal where you're signed in to Teleport:\n```%s```\n%s",
++		"%s*Before we can get started, you need to allow me to create beams as you.*\n\n1. Run this in a terminal where you're signed in to Teleport:\n```%s```\n2. %s",
 +		prefix,
 +		r.delegationCommand(),
 +		next,
@@ -1063,16 +1060,17 @@ index 00000000000..ac897ab0861
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..6a248f02381
+index 00000000000..1d712e5da90
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,217 @@
 +package slack
 +
 +import (
 +	"context"
 +	"os"
 +	"path/filepath"
++	"strings"
 +	"testing"
 +	"time"
 +
@@ -1161,6 +1159,11 @@ index 00000000000..6a248f02381
 +	require.Empty(t, beamTargets([]string{"rm"}))
 +}
 +
++func TestCodeBlock(t *testing.T) {
++	require.Equal(t, "ok", codeBlock("ok\n"))
++	require.Equal(t, "```line one\nline two```", codeBlock("line one\nline two\n"))
++}
++
 +func TestStripANSI(t *testing.T) {
 +	require.Equal(t, "ERROR: boom", stripANSI("\x1b[31mERROR:\x1b[0m boom"))
 +}
@@ -1208,6 +1211,7 @@ index 00000000000..6a248f02381
 +		require.Contains(t, out, "Before we can get started, you need to allow me to create beams as you.", command)
 +		require.Contains(t, out, "--bot=scotty", command)
 +		require.Contains(t, out, "/beams connect <session-id>", command)
++		require.False(t, strings.HasPrefix(out, "```"), "the prompt has its own code block and must not be wrapped again")
 +	}
 +	_, err := os.Stat(logPath)
 +	require.True(t, os.IsNotExist(err), "no tsh commands may run before the user connects")
@@ -1223,6 +1227,12 @@ index 00000000000..6a248f02381
 +		_, err := runner.Run(ctx, "T1", "UALICE", command)
 +		require.NoError(t, err, command)
 +	}
++	// ls is a readable list, not raw JSON in a code block.
++	out, err = runner.Run(ctx, "T1", "UALICE", "ls")
++	require.NoError(t, err)
++	require.True(t, strings.HasPrefix(out, "You have *2 beams*:\n• `mine`"), out)
++	require.NotContains(t, out, "```")
++
 +	calls, err := os.ReadFile(logPath)
 +	require.NoError(t, err)
 +	require.NotContains(t, string(calls), "--identity=/plugin-identity")
@@ -1234,7 +1244,7 @@ index 00000000000..6a248f02381
 +	require.NoError(t, os.WriteFile(filepath.Join(profile, "delegation-session"), []byte("99999999-2222-3333-4444-555555555555"), 0o600))
 +	out, err = runner.Run(ctx, "T1", "UALICE", "ls")
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Your authorization has expired. Before we can get started")
++	require.Contains(t, out, "Your authorization has expired.\n*Before we can get started")
 +	out, err = runner.Run(ctx, "T1", "UALICE", "status")
 +	require.NoError(t, err)
 +	require.Equal(t, "Not connected. Run `/beams connect`.", out)
@@ -1273,10 +1283,10 @@ index 00000000000..6a248f02381
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..2910b8d77ae
+index 00000000000..1695da7dde1
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,357 @@
+@@ -0,0 +1,358 @@
 +package slack
 +
 +import (
@@ -1395,7 +1405,7 @@ index 00000000000..2910b8d77ae
 +				return "", trace.Wrap(err)
 +			}
 +		}
-+		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now())), "\n\n")), nil
++		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now(), "You don't have any beams yet. Ask me to create one.")), "\n\n")), nil
 +	}
 +
 +	// The thread file holds the thread's beam, plus "new" when Scotty switched
@@ -1485,7 +1495,7 @@ index 00000000000..2910b8d77ae
 +			return "", trace.Wrap(err)
 +		}
 +	}
-+	return s.authorizationReply("Then reply here with the session ID it prints and I'll pick up your request."), nil
++	return s.authorizationReply("Reply here with the session ID it prints and I'll pick up your request."), nil
 +}
 +
 +// isBeamsListQuestion reports whether a request only asks which beams the
@@ -1494,10 +1504,11 @@ index 00000000000..2910b8d77ae
 +	return beamsPlural.MatchString(text) && beamsListQuestion.MatchString(text) && !beamsActionWord.MatchString(text)
 +}
 +
-+// formatBeamsList describes the user's beams for Slack.
-+func formatBeamsList(beams []map[string]any, now time.Time) string {
++// formatBeamsList describes the user's beams for Slack. empty is the reply
++// when there are none.
++func formatBeamsList(beams []map[string]any, now time.Time, empty string) string {
 +	if len(beams) == 0 {
-+		return "You don't have any beams yet. Ask me to create one."
++		return empty
 +	}
 +	var b strings.Builder
 +	if len(beams) == 1 {
@@ -1636,7 +1647,7 @@ index 00000000000..2910b8d77ae
 +}
 diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
 new file mode 100644
-index 00000000000..439a343a0b3
+index 00000000000..b3797067d6b
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty_test.go
 @@ -0,0 +1,271 @@
@@ -1788,7 +1799,7 @@ index 00000000000..439a343a0b3
 +
 +	out, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.000300", "make a page")
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Your authorization has expired. Before we can get started")
++	require.Contains(t, out, "Your authorization has expired.\n*Before we can get started")
 +	_, err = os.Stat(sessionPath)
 +	require.True(t, os.IsNotExist(err), "the expired session should be forgotten")
 +}
@@ -1881,9 +1892,9 @@ index 00000000000..439a343a0b3
 +	out := formatBeamsList([]map[string]any{
 +		{"id": "echoing-axis", "region": "us-west-2", "expires": "2026-10-02T21:00:00.123Z"},
 +		{"id": "turbo-path", "region": "us-west-2", "expires": "2026-10-01T22:30:00Z", "url": "https://turbo-path.example"},
-+	}, now)
++	}, now, "none")
 +	require.Equal(t, "You have *2 beams*:\n• `echoing-axis` (us-west-2), expires in 23 hours\n• `turbo-path` (us-west-2), expires in 30 minutes, published at https://turbo-path.example", out)
-+	require.Equal(t, "You don't have any beams yet. Ask me to create one.", formatBeamsList(nil, now))
++	require.Equal(t, "none", formatBeamsList(nil, now, "none"))
 +}
 +
 +func TestScottyAnswersListFromTSH(t *testing.T) {

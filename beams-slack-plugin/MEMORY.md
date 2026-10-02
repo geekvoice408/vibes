@@ -64,6 +64,11 @@ beam); beam-list questions skip Claude.
   be in the channel for slash commands.
 - `events_api` envelopes (`app_mention`, `message.*`) become
   `BeamsMessageEvent`. Scotty replies in a thread with `chat.postMessage`.
+- Slash-command replies are posted as-is. Raw `tsh` output (`add`, `exec`,
+  `claude`, `publish`, ...) goes through `codeBlock`; `ls` uses
+  `formatBeamsList` (same list Scotty shows); messages such as the
+  authorization prompt carry their own formatting. Wrapping every multi-line
+  reply used to double-wrap the prompt's code block.
 - Duplicate deliveries are dropped by `channel-ts` (`recentSet`, last 1000).
 - `threadQueue` allows one Scotty run per thread. Messages arriving mid-run
   get "Still working on your earlier request" and only the newest is kept;
