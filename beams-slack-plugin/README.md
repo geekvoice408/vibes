@@ -1,5 +1,7 @@
 # Beams Slack Plugin
 
+<img src="assets/scotty-icon.png" alt="Scotty, the Beams Slack bot" width="128" align="right">
+
 Manage [Teleport Beams](https://goteleport.com/) from Slack, either with a
 `/beams` slash command or by asking **Scotty** in plain language ("@scotty
 make a webpage about things to do in Seattle and publish it").
@@ -151,8 +153,27 @@ Create or update a Slack app at <https://api.slack.com/apps>:
   `channels:history`, `groups:history`.
 - **App Home**: enable the Messages tab and "Allow users to send messages".
   Set the display name to `scotty`.
+- **App icon**: see [Set Scotty's icon](#set-scottys-icon) below.
 - **Install / Reinstall to Workspace** after any scope change, then
   `/invite` the app to the channels where it should listen.
+
+#### Set Scotty's icon
+
+The bot's icon is [`assets/scotty-icon.png`](assets/scotty-icon.png), a
+1024 x 1024 PNG.
+
+1. Download it. On GitHub, open the file and click **Download raw file**, or
+   use the copy in your clone of this repo.
+2. At <https://api.slack.com/apps>, open the app and go to **Basic
+   Information**.
+3. Scroll to **Display Information**. Under **App icon**, click **Add App
+   Icon** (or the current icon) and upload `scotty-icon.png`. Slack accepts
+   square images from 512 x 512 to 2000 x 2000 pixels.
+4. Set **Background color** to `#3B2A9E`, the icon's own purple, so it
+   blends in. Set **App name** to `Scotty` and fill in a short description if
+   you like.
+5. Click **Save Changes**. The new icon appears on Scotty's messages and
+   profile within a few minutes. No reinstall is needed for the icon.
 
 ### 3. Run it
 
