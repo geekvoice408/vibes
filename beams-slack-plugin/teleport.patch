@@ -1407,13 +1407,14 @@ index 00000000000..100d9cdff3b
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..1d4edbbe37a
+index 00000000000..9f069fdeefa
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,472 @@
 +package slack
 +
 +import (
++	"cmp"
 +	"context"
 +	"encoding/json"
 +	"fmt"
@@ -1580,19 +1581,16 @@ index 00000000000..1d4edbbe37a
 +		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now(), "You don't have any beams yet. Ask me to create one.")), "\n\n")), nil
 +	}
 +
-+	// The thread file holds the thread's beam, plus "new" when Scotty switched
-+	// the thread to a beam that has no Claude conversation yet.
 +	threadPath := filepath.Join(s.profileDir, "threads", threadKey)
-+	var threadBeam string
-+	fresh := false
-+	if previous, err := os.ReadFile(threadPath); err == nil {
-+		if fields := strings.Fields(string(previous)); len(fields) > 0 {
-+			threadBeam = fields[0]
-+			fresh = len(fields) > 1 && fields[1] == "new"
-+		}
++	thread := readThreadState(threadPath)
++	agent := thread.agent
++	if requested := requestedAgent(text); requested != "" && requested != agent {
++		agent = requested
++		notes = append(notes, fmt.Sprintf("Using %s for this thread.", agentDisplayName(agent)))
 +	}
-+	name, continued := chooseBeam(beams, threadBeam, text)
-+	if fresh && name == threadBeam {
++	name, continued := chooseBeam(beams, thread.beam, text)
++	// Only continue a conversation the same agent already has in this beam.
++	if name != thread.beam || thread.fresh || agent != thread.agent {
 +		continued = false
 +	}
 +
@@ -1605,26 +1603,26 @@ index 00000000000..1d4edbbe37a
 +		created = true
 +		notes = append(notes, fmt.Sprintf("Created beam `%s`.", name))
 +	}
-+	// Mark the beam "new" until a Claude run succeeds there, so a failed first
++	// Mark the beam fresh until an agent run succeeds there, so a failed first
 +	// run is not followed by --continue.
-+	marker := name
-+	if !continued {
-+		marker += " new"
-+	}
-+	if err := os.WriteFile(threadPath, []byte(marker), 0o600); err != nil {
++	if err := writeThreadState(threadPath, threadState{beam: name, fresh: !continued, agent: agent}); err != nil {
 +		return "", trace.Wrap(err)
 +	}
 +
-+	claudeArgs := []string{name}
++	agentArgs := []string{name}
 +	if continued {
-+		claudeArgs = append(claudeArgs, "--continue")
++		agentArgs = append(agentArgs, "--continue")
 +	}
-+	claudeArgs = append(claudeArgs, scottyPrompt(name, s.username, created, text))
-+	output, err := s.claude(ctx, claudeArgs)
++	agentArgs = append(agentArgs, scottyPrompt(name, s.username, created, text))
++	run := s.claude
++	if agent == agentCodex {
++		run = s.codex
++	}
++	output, err := run(ctx, agentArgs)
 +	if err != nil {
-+		return "", trace.Wrap(err, "running Claude Code in beam %q", name)
++		return "", trace.Wrap(err, "running %s in beam %q", agentDisplayName(agent), name)
 +	}
-+	if err := os.WriteFile(threadPath, []byte(name), 0o600); err != nil {
++	if err := writeThreadState(threadPath, threadState{beam: name, agent: agent}); err != nil {
 +		return "", trace.Wrap(err)
 +	}
 +
@@ -1638,9 +1636,9 @@ index 00000000000..1d4edbbe37a
 +		actionNotes = append(actionNotes, note)
 +		if newBeam != "" {
 +			// Follow-ups in this thread should work in the beam the user asked
-+			// for, starting a new Claude conversation there.
++			// for, starting a new agent conversation there.
 +			name = newBeam
-+			if err := os.WriteFile(threadPath, []byte(name+" new"), 0o600); err != nil {
++			if err := writeThreadState(threadPath, threadState{beam: name, fresh: true, agent: agent}); err != nil {
 +				return "", trace.Wrap(err)
 +			}
 +		}
@@ -1649,6 +1647,74 @@ index 00000000000..1d4edbbe37a
 +	parts := append(notes, reply)
 +	parts = append(parts, actionNotes...)
 +	return truncateSlackOutput(strings.TrimSpace(strings.Join(parts, "\n\n"))), nil
++}
++
++const (
++	agentClaude = "claude"
++	agentCodex  = "codex"
++)
++
++// agentRequest matches a request to use a particular coding agent, such as
++// "use codex to ..." or a request that starts with "codex".
++var agentRequest = regexp.MustCompile(`(?i)(?:^\W*|\b(?:use|using|with|via|through|ask)\s+)(claude(?:\s+code)?|codex)\b`)
++
++// requestedAgent returns the agent a request asks for, or "" for none.
++func requestedAgent(text string) string {
++	m := agentRequest.FindStringSubmatch(text)
++	if m == nil {
++		return ""
++	}
++	if strings.HasPrefix(strings.ToLower(m[1]), agentCodex) {
++		return agentCodex
++	}
++	return agentClaude
++}
++
++func agentDisplayName(agent string) string {
++	if agent == agentCodex {
++		return "Codex"
++	}
++	return "Claude Code"
++}
++
++// threadState is what Scotty remembers about a Slack thread: its beam, which
++// agent it uses, and whether that agent has no conversation there yet.
++type threadState struct {
++	beam  string
++	fresh bool
++	agent string
++}
++
++// readThreadState parses "<beam> [new] [claude|codex]". Older files without
++// an agent used Claude.
++func readThreadState(path string) threadState {
++	state := threadState{agent: agentClaude}
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return state
++	}
++	fields := strings.Fields(string(data))
++	if len(fields) > 0 {
++		state.beam = fields[0]
++	}
++	for _, field := range fields[min(1, len(fields)):] {
++		switch field {
++		case "new":
++			state.fresh = true
++		case agentClaude, agentCodex:
++			state.agent = field
++		}
++	}
++	return state
++}
++
++func writeThreadState(path string, state threadState) error {
++	fields := []string{state.beam}
++	if state.fresh {
++		fields = append(fields, "new")
++	}
++	fields = append(fields, cmp.Or(state.agent, agentClaude))
++	return trace.Wrap(os.WriteFile(path, []byte(strings.Join(fields, " ")), 0o600))
 +}
 +
 +// requestAuthorization saves the request for later and asks the user to let
@@ -1819,10 +1885,10 @@ index 00000000000..1d4edbbe37a
 +}
 diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
 new file mode 100644
-index 00000000000..414b2109445
+index 00000000000..ed726e4a2a2
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty_test.go
-@@ -0,0 +1,315 @@
+@@ -0,0 +1,381 @@
 +package slack
 +
 +import (
@@ -2137,6 +2203,72 @@ index 00000000000..414b2109445
 +	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
 +	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000800"}, "what are beams")
 +	require.Equal(t, []string{beamsIntro}, bot.replies, "no \"On it\" message for instant answers")
++}
++
++func TestRequestedAgent(t *testing.T) {
++	for text, want := range map[string]string{
++		"use codex to make a webpage":           agentCodex,
++		"make a webpage with Codex":             agentCodex,
++		"codex: fix the tests":                  agentCodex,
++		"switch back, use claude code":          agentClaude,
++		"Claude, summarize the logs":            agentClaude,
++		"make a webpage comparing claude codex": "",
++		"make a webpage":                        "",
++	} {
++		require.Equal(t, want, requestedAgent(text), text)
++	}
++}
++
++func TestThreadStateCompatibility(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "thread")
++	require.NoError(t, os.WriteFile(path, []byte("mine new"), 0o600))
++	require.Equal(t, threadState{beam: "mine", fresh: true, agent: agentClaude}, readThreadState(path))
++	require.NoError(t, writeThreadState(path, threadState{beam: "mine", agent: agentCodex}))
++	require.Equal(t, threadState{beam: "mine", agent: agentCodex}, readThreadState(path))
++	require.Equal(t, threadState{agent: agentClaude}, readThreadState(filepath.Join(t.TempDir(), "missing")))
++}
++
++func TestScottyAgentPerThread(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "scotty",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	thread := "C1-1700000000.000900"
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "use codex to make a page")
++	require.NoError(t, err)
++	require.Contains(t, out, "Using Codex for this thread.")
++	for _, text := range []string{"make the title bigger", "use claude to review it", "thanks, tweak the colors"} {
++		_, err := runner.Ask(ctx, "T1", "UALICE", thread, text)
++		require.NoError(t, err, text)
++	}
++
++	data, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	var execs []string
++	for _, line := range strings.Split(string(data), "\n") {
++		if strings.Contains(line, "beams exec") {
++			execs = append(execs, line)
++		}
++	}
++	require.Len(t, execs, 4)
++	require.Contains(t, execs[0], "'codex' 'exec'")
++	require.NotContains(t, execs[0], "'resume'")
++	require.Contains(t, execs[1], "'codex' 'exec'")
++	require.Contains(t, execs[1], "'resume' '--last'", "follow-ups continue the Codex conversation")
++	require.Contains(t, execs[2], "'claude' '-p'")
++	require.NotContains(t, execs[2], "'--continue'", "switching agents starts a fresh conversation")
++	require.Contains(t, execs[3], "'claude' '-p'")
++	require.Contains(t, execs[3], "'--continue'")
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..b48a4703dd4 100644

@@ -155,7 +155,7 @@ string over `tsh beams exec`:
   answer. Not yet tried live in a beam.
 
 Beams ship both CLIs preconfigured (`~/AGENTS.md` lists the Anthropic and
-OpenAI credentials). Scotty uses Claude only.
+OpenAI credentials). Scotty uses either; see below.
 
 ### Scotty (`beams_scotty.go`)
 
@@ -171,6 +171,11 @@ OpenAI credentials). Scotty uses Claude only.
    thread containing a UUID connects (same validation as `/beams connect`)
    and replays the pending request. If minting fails with AccessDenied or
    NotFound, the session file is removed and the user is asked again.
+2b. Agent choice: `requestedAgent` looks for "use/with/via/through/ask
+   codex|claude" or a leading "codex"/"claude". The thread file is
+   `<beam> [new] <claude|codex>` (older files without an agent mean Claude).
+   Claude is the default; switching agents adds "Using X for this thread."
+   and starts a fresh conversation (no `--continue`/`resume`).
 3. Questions only about which beams the user has (`isBeamsListQuestion`:
    mentions "beams" plus list/show/what/which/how many, and no action verb)
    are answered from `tsh beams ls` by `formatBeamsList` without running

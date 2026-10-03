@@ -17,9 +17,9 @@ and needs no inbound ports or public URL.
 - **`/beams` slash commands**: list, create, run commands in, publish, copy
   files to, and delete beams. Replies are private to the person who ran them.
 - **Scotty**: mention the app, DM it, or start a message with `scotty`.
-  Scotty picks or creates one of your beams, runs Claude Code inside it with
-  your request, publishes the result if asked, and replies in a thread.
-  Replies in that thread continue the same beam and Claude conversation.
+  Scotty picks or creates one of your beams, runs Claude Code or Codex inside
+  it with your request, publishes the result if asked, and replies in a
+  thread. Replies in that thread continue the same beam and conversation.
 - **Who you are**: the plugin looks up your Slack email, finds the Teleport
   user with that username, and lets you in only if that user has the
   configured role (`beam-user`). No list of Slack IDs to maintain.
@@ -49,11 +49,17 @@ Here's what you can do, right in Slack:
   open after signing in to Teleport.
 - **See your beams** by asking "how many beams do I have?"
 - **Start fresh** by asking for a new beam.
+- **Pick your assistant.** Scotty uses Claude Code unless you say "use codex"
+  (or "use claude" to switch back).
 
 Comfortable with commands? `/beams help` lists everything, including running
 Claude Code or Codex yourself (see [Slash commands](#slash-commands)).
 
-Scotty gives this same overview if you ask him "what can I do with beams?".
+Scotty gives this same overview if you ask him "what can I do with beams?"
+or "what is a beam?":
+
+<img src="assets/screenshots/scotty-what-is-a-beam.png" alt="Scotty answers 'what is a beam' with a plain-language overview of Teleport Beams and what you can do in Slack" width="560">
+
 Learn more in the [Teleport Beams docs](https://goteleport.com/docs/beams/).
 
 ## Slash commands
@@ -88,7 +94,8 @@ Learn more in the [Teleport Beams docs](https://goteleport.com/docs/beams/).
   `--continue` (or `-c`) resumes that agent's previous conversation in the
   beam, for example `/beams codex fabled-firefly -c add a dark mode`.
   Everything after the beam name (and `-c`) is sent as typed, so prompts can
-  contain apostrophes without quoting. Scotty uses Claude Code.
+  contain apostrophes without quoting. Scotty can use either one; see
+  [Scotty](#scotty).
 - `publish` exposes port 8080 in the beam as a Teleport app.
 - Interactive `/beams ssh` is not supported; use `exec`.
 - A brand-new beam takes a moment to accept SSH; commands retry for up to 3
@@ -119,7 +126,7 @@ connection `/beams connect` makes, and it lasts up to 7 days.
 
 Questions about which beams you have ("how many beams do I have", "list my
 beams") are answered straight from `tsh beams ls` in a second or two. Anything
-else starts a Claude Code session in a beam, which usually takes a minute or
+else starts a Claude Code or Codex session in a beam, which usually takes a minute or
 more; Scotty posts "On it" right away so you know it is working. Scotty works
 on one request per thread at a time: if you send another message while it is
 busy, it replies "Still working on your earlier request" and handles your
@@ -131,12 +138,15 @@ For each other request Scotty:
 
 1. Picks one of your own beams: the one this thread already uses, a beam you
    named, or your newest. If you have none, it creates one, owned by you.
-2. Runs Claude Code in that beam with your request. Claude is told to serve
-   anything it wants to share on port 8080 in the background.
-3. Carries out actions Claude asks for (`publish`, `unpublish`,
-   `create_beam`) from outside the beam, since Claude cannot manage beams from
+2. Runs a coding agent in that beam with your request: Claude Code by
+   default, or Codex if you say "use codex", "with codex", or start with
+   "codex". The thread keeps using that agent (say "use claude" to switch
+   back), and switching starts a fresh conversation. The agent is told to
+   serve anything it wants to share on port 8080 in the background.
+3. Carries out actions the agent asks for (`publish`, `unpublish`,
+   `create_beam`) from outside the beam, since it cannot manage beams from
    inside the VM.
-4. Replies in the thread with Claude's answer and any published URL.
+4. Replies in the thread with the agent's answer and any published URL.
 
 Asking for another beam creates one, and the rest of that thread works in it:
 
@@ -308,9 +318,9 @@ Start from `config.toml.example`. The Beams settings:
 | `delegation_ttl` | `168h` | Session length in the suggested `tsh` command (Teleport max 7 days) |
 | `identity_ttl` | `15m` | Lifetime of per-command delegated certificates (max 1h) |
 | `command_timeout` | `2m` | Limit for normal commands |
-| `claude_timeout` | `15m` | Limit for `/beams claude` and Scotty |
+| `claude_timeout` | `15m` | Limit for `/beams claude` and Scotty's Claude runs |
 | `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags. Print mode cannot ask for tool approval, and beams are throwaway runtimes. |
-| `codex_timeout` | `15m` | Limit for `/beams codex` |
+| `codex_timeout` | `15m` | Limit for `/beams codex` and Scotty's Codex runs |
 | `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
@@ -343,7 +353,7 @@ Main files under `integrations/access/slack/`:
 | --- | --- |
 | `beams_app.go` | Socket Mode loop, slash-command and Scotty message handlers |
 | `beams_commands.go` | `/beams` commands, user lookup, delegation and authorization prompts, `tsh` runner |
-| `beams_scotty.go` | Scotty request parsing, beam choice, Claude prompt, actions |
+| `beams_scotty.go` | Scotty request parsing, beam and agent choice, agent prompt, actions |
 | `socketmode.go`, `types.go` | Slash-command and Events API envelope decoding |
 | `bot.go` | Slack replies (`response_url` and threaded `chat.postMessage`) |
 | `config.go` | `[beams]` settings and validation |
