@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..bdb2845bae0
+index 00000000000..e84f3780ac5
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,292 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -235,8 +235,9 @@ index 00000000000..bdb2845bae0
 +	)
 +	log.InfoContext(ctx, "Executing Beams slash command")
 +
-+	if fields := strings.Fields(event.Text); len(fields) > 1 && fields[0] == "claude" {
-+		notice := fmt.Sprintf("Running Claude Code in `%s`. This can take a few minutes.", fields[1])
++	agentNames := map[string]string{"claude": "Claude Code", "codex": "Codex"}
++	if fields := strings.Fields(event.Text); len(fields) > 1 && agentNames[fields[0]] != "" {
++		notice := fmt.Sprintf("Running %s in `%s`. This can take a few minutes.", agentNames[fields[0]], fields[1])
 +		if err := a.bot.PostBeamsReply(ctx, event.ResponseURL, notice); err != nil {
 +			log.WarnContext(ctx, "Failed to post Beams progress notice", "error", err)
 +		}
@@ -477,10 +478,10 @@ index 00000000000..de8abc00554
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..e20b5fb36fe
+index 00000000000..7dfd4771403
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,577 @@
+@@ -0,0 +1,635 @@
 +package slack
 +
 +import (
@@ -513,12 +514,16 @@ index 00000000000..e20b5fb36fe
 +
 +const (
 +	defaultBeamsCommandTimeout = 2 * time.Minute
-+	defaultClaudeTimeout       = 15 * time.Minute
++	defaultAgentTimeout        = 15 * time.Minute
 +)
 +
-+// defaultClaudeArgs lets Claude Code run tools without interactive approval,
-+// which print mode cannot ask for. Beams are ephemeral runtimes.
-+var defaultClaudeArgs = []string{"--dangerously-skip-permissions"}
++// defaultClaudeArgs and defaultCodexArgs let the agents run tools without
++// interactive approval, which non-interactive runs cannot ask for. Beams are
++// ephemeral runtimes.
++var (
++	defaultClaudeArgs = []string{"--dangerously-skip-permissions"}
++	defaultCodexArgs  = []string{"--dangerously-bypass-approvals-and-sandbox"}
++)
 +
 +var (
 +	safeSlackID = regexp.MustCompile(`^[A-Z0-9]+$`)
@@ -594,6 +599,9 @@ index 00000000000..e20b5fb36fe
 +		out = codeBlock(out)
 +	case "claude":
 +		out, err = s.claude(ctx, words[1:])
++		out = codeBlock(out)
++	case "codex":
++		out, err = s.codex(ctx, words[1:])
 +		out = codeBlock(out)
 +	case "ssh":
 +		return "", trace.BadParameter("interactive SSH is unavailable in Slack; use /beams exec <name> <command>")
@@ -750,37 +758,87 @@ index 00000000000..e20b5fb36fe
 +	return truncateSlackOutput(out), nil
 +}
 +
-+// claude runs Claude Code in print mode inside a beam and returns its answer.
-+func (s beamsSession) claude(ctx context.Context, args []string) (string, error) {
++// codingAgent describes how to run a coding agent CLI non-interactively in a
++// beam for /beams claude and /beams codex.
++type codingAgent struct {
++	// name is the slash subcommand and the config key prefix.
++	name string
++	// timeout is the configured run limit; empty means defaultAgentTimeout.
++	timeout string
++	// command builds the agent command line for a prompt, optionally
++	// continuing the agent's most recent conversation in the beam.
++	command func(continued bool, prompt string) []string
++}
++
++// runAgent parses "<name> [--continue] <prompt...>" and runs the agent in
++// that beam, returning its final answer.
++func (s beamsSession) runAgent(ctx context.Context, agent codingAgent, args []string) (string, error) {
++	usage := fmt.Sprintf("usage: /beams %s <name> [--continue] <prompt...>", agent.name)
 +	if len(args) < 2 {
-+		return "", trace.BadParameter("usage: /beams claude <name> [--continue] <prompt...>")
++		return "", trace.BadParameter("%s", usage)
 +	}
 +	name, args := args[0], args[1:]
-+	extraArgs := s.runner.Config.ClaudeArgs
-+	if extraArgs == nil {
-+		extraArgs = defaultClaudeArgs
-+	}
-+	claudeArgs := append([]string{"claude", "-p"}, extraArgs...)
++	continued := false
 +	if args[0] == "--continue" || args[0] == "-c" {
-+		claudeArgs = append(claudeArgs, "--continue")
++		continued = true
 +		args = args[1:]
 +	}
 +	if len(args) == 0 {
-+		return "", trace.BadParameter("usage: /beams claude <name> [--continue] <prompt...>")
++		return "", trace.BadParameter("%s", usage)
 +	}
-+	claudeArgs = append(claudeArgs, strings.Join(args, " "))
 +
-+	s.timeout = defaultClaudeTimeout
-+	if s.runner.Config.ClaudeTimeout != "" {
-+		timeout, err := time.ParseDuration(s.runner.Config.ClaudeTimeout)
++	s.timeout = defaultAgentTimeout
++	if agent.timeout != "" {
++		timeout, err := time.ParseDuration(agent.timeout)
 +		if err != nil {
-+			return "", trace.BadParameter("invalid beams.claude_timeout: %v", err)
++			return "", trace.BadParameter("invalid beams.%s_timeout: %v", agent.name, err)
 +		}
 +		s.timeout = timeout
 +	}
 +	// The remote side runs the command through a shell, so pass one quoted
 +	// command string rather than separate arguments.
-+	return s.target(ctx, []string{"exec", name, shellQuoteJoin(claudeArgs)})
++	command := agent.command(continued, strings.Join(args, " "))
++	return s.target(ctx, []string{"exec", name, shellQuoteJoin(command)})
++}
++
++// claude runs Claude Code in print mode inside a beam and returns its answer.
++func (s beamsSession) claude(ctx context.Context, args []string) (string, error) {
++	extraArgs := s.runner.Config.ClaudeArgs
++	if extraArgs == nil {
++		extraArgs = defaultClaudeArgs
++	}
++	return s.runAgent(ctx, codingAgent{
++		name:    "claude",
++		timeout: s.runner.Config.ClaudeTimeout,
++		command: func(continued bool, prompt string) []string {
++			command := append([]string{"claude", "-p"}, extraArgs...)
++			if continued {
++				command = append(command, "--continue")
++			}
++			return append(command, prompt)
++		},
++	}, args)
++}
++
++// codex runs Codex non-interactively inside a beam and returns its answer.
++// Codex prints progress to stderr and only the final message to stdout.
++func (s beamsSession) codex(ctx context.Context, args []string) (string, error) {
++	extraArgs := s.runner.Config.CodexArgs
++	if extraArgs == nil {
++		extraArgs = defaultCodexArgs
++	}
++	return s.runAgent(ctx, codingAgent{
++		name:    "codex",
++		timeout: s.runner.Config.CodexTimeout,
++		command: func(continued bool, prompt string) []string {
++			// A beam's home directory is not a Git repository.
++			command := append([]string{"codex", "exec", "--skip-git-repo-check"}, extraArgs...)
++			if continued {
++				command = append(command, "resume", "--last")
++			}
++			return append(command, prompt)
++		},
++	}, args)
 +}
 +
 +// shellQuoteJoin quotes each argument for a POSIX shell.
@@ -1041,6 +1099,7 @@ index 00000000000..e20b5fb36fe
 +/beams add [--region=<region>]
 +/beams exec <name> <command...>
 +/beams claude <name> [--continue] <prompt...>
++/beams codex <name> [--continue] <prompt...>
 +/beams publish <name> [--tcp]
 +/beams unpublish <name>
 +/beams rm <name>
@@ -1060,10 +1119,10 @@ index 00000000000..e20b5fb36fe
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..1d712e5da90
+index 00000000000..9e0d4b90d74
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,222 @@
 +package slack
 +
 +import (
@@ -1205,7 +1264,7 @@ index 00000000000..1d712e5da90
 +	ctx := t.Context()
 +
 +	// Every beam action asks for authorization first and runs nothing.
-+	for _, command := range []string{"ls", "add", "exec mine uname -a", "claude mine hi", "publish mine", "rm mine", "scp ./f mine:/tmp"} {
++	for _, command := range []string{"ls", "add", "exec mine uname -a", "claude mine hi", "codex mine hi", "publish mine", "rm mine", "scp ./f mine:/tmp"} {
 +		out, err := runner.Run(ctx, "T1", "UALICE", command)
 +		require.NoError(t, err, command)
 +		require.Contains(t, out, "Before we can get started, you need to allow me to create beams as you.", command)
@@ -1223,7 +1282,7 @@ index 00000000000..1d712e5da90
 +	// After connecting, commands run as the user, never as the bot.
 +	_, err = runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
 +	require.NoError(t, err)
-+	for _, command := range []string{"add", "ls", "exec mine uname -a", "claude mine --continue \"what's failing?\"", "rm mine"} {
++	for _, command := range []string{"add", "ls", "exec mine uname -a", "claude mine --continue \"what's failing?\"", "codex mine \"what's failing?\"", "codex mine -c fix it", "rm mine"} {
 +		_, err := runner.Run(ctx, "T1", "UALICE", command)
 +		require.NoError(t, err, command)
 +	}
@@ -1238,6 +1297,11 @@ index 00000000000..1d712e5da90
 +	require.NotContains(t, string(calls), "--identity=/plugin-identity")
 +	require.Contains(t, string(calls), "beams exec mine uname -a")
 +	require.Contains(t, string(calls), `beams exec mine 'claude' '-p' '--dangerously-skip-permissions' '--continue' 'what'\''s failing?'`)
++	require.Contains(t, string(calls), `beams exec mine 'codex' 'exec' '--skip-git-repo-check' '--dangerously-bypass-approvals-and-sandbox' 'what'\''s failing?'`)
++	require.Contains(t, string(calls), `beams exec mine 'codex' 'exec' '--skip-git-repo-check' '--dangerously-bypass-approvals-and-sandbox' 'resume' '--last' 'fix it'`)
++
++	_, err = runner.Run(ctx, "T1", "UALICE", "codex mine")
++	require.ErrorContains(t, err, "usage: /beams codex <name> [--continue] <prompt...>")
 +
 +	// An expired session is forgotten and the user is asked again.
 +	profile := filepath.Join(runner.Config.ProfilesDir, "T1", "UALICE")
@@ -2013,10 +2077,10 @@ index d0abf811e9a..b48a4703dd4 100644
  func (b Bot) lookupDirectChannelByEmail(ctx context.Context, email string) (string, error) {
  	var result UsersLookupResponse
 diff --git a/integrations/access/slack/cmd/teleport-slack/example_config.toml b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-index a8ecf146bf6..dbd3b760948 100644
+index a8ecf146bf6..bd8486f3636 100644
 --- a/integrations/access/slack/cmd/teleport-slack/example_config.toml
 +++ b/integrations/access/slack/cmd/teleport-slack/example_config.toml
-@@ -64,6 +64,37 @@ enabled = false
+@@ -64,6 +64,40 @@ enabled = false
  # The trait should hold value of Slack user ID.
  # slack_user_id_trait = "slack_uid"
  
@@ -2034,11 +2098,14 @@ index a8ecf146bf6..dbd3b760948 100644
 +# default ["--dangerously-skip-permissions"], which is needed for Claude to use
 +# tools without interactive approval.
 +claude_timeout = "15m"
-+# Commands run as the plugin identity, which needs the beam-user role, and
-+# bot-owned beams are visible only to the Slack user who created them. A user
-+# who runs /beams connect instead acts as their own Teleport user. That needs
-+# plugin_identity to be a tbot output for bot_name. Teleport caps delegation
-+# sessions at 168h.
++# /beams codex runs Codex non-interactively (codex exec). codex_args replaces
++# the default ["--dangerously-bypass-approvals-and-sandbox"] for the same
++# reason; --skip-git-repo-check is always passed.
++codex_timeout = "15m"
++# Every beam action runs as the Slack user's own Teleport user through a
++# delegation session they grant to bot_name (the tbot identity in
++# plugin_identity). The plugin replies with the tsh command to create one.
++# Teleport caps delegation sessions at 168h.
 +bot_name = "beams-slack"
 +delegation_ttl = "168h"
 +
@@ -2054,7 +2121,7 @@ index a8ecf146bf6..dbd3b760948 100644
  [role_to_recipients]
  # Map roles to recipients.
  #
-@@ -76,4 +107,4 @@ enabled = false
+@@ -76,4 +110,4 @@ enabled = false
  
  [log]
  output = "stderr" # Logger output. Could be "stdout", "stderr" or "/var/lib/teleport/slack.log"
@@ -2062,7 +2129,7 @@ index a8ecf146bf6..dbd3b760948 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..57455c502f9 100644
+index e27fd004c15..ed3896242a4 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -2074,7 +2141,7 @@ index e27fd004c15..57455c502f9 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,34 @@ type Config struct {
+@@ -39,12 +41,38 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -2098,6 +2165,10 @@ index e27fd004c15..57455c502f9 100644
 +	// extra Claude Code flags.
 +	ClaudeTimeout string   `toml:"claude_timeout"`
 +	ClaudeArgs    []string `toml:"claude_args"`
++	// CodexTimeout bounds /beams codex runs. CodexArgs replaces the default
++	// extra Codex flags.
++	CodexTimeout  string   `toml:"codex_timeout"`
++	CodexArgs     []string `toml:"codex_args"`
 +	BotName       string   `toml:"bot_name"`
 +	DelegationTTL string   `toml:"delegation_ttl"`
 +	// RequiredRole authorizes Slack users whose email matches a Teleport user
@@ -2109,7 +2180,7 @@ index e27fd004c15..57455c502f9 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +155,43 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +159,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -2153,7 +2224,7 @@ index e27fd004c15..57455c502f9 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +262,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +266,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

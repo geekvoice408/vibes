@@ -10,7 +10,7 @@ and usage are in `README.md`.
 
 Working end to end on the live deployment:
 
-- `/beams` slash commands (`ls`, `add`, `exec`, `claude`, `publish`,
+- `/beams` slash commands (`ls`, `add`, `exec`, `claude`, `codex`, `publish`,
   `unpublish`, `rm`, `scp`, `status`, `connect`, `disconnect`)
 - Slack users authorized by matching their Slack email to a Teleport user that
   has `beam-user`
@@ -65,7 +65,7 @@ beam); beam-list questions skip Claude.
 - `events_api` envelopes (`app_mention`, `message.*`) become
   `BeamsMessageEvent`. Scotty replies in a thread with `chat.postMessage`.
 - Slash-command replies are posted as-is. Raw `tsh` output (`add`, `exec`,
-  `claude`, `publish`, ...) goes through `codeBlock`; `ls` uses
+  `claude`, `codex`, `publish`, ...) goes through `codeBlock`; `ls` uses
   `formatBeamsList` (same list Scotty shows); messages such as the
   authorization prompt carry their own formatting. Wrapping every multi-line
   reply used to double-wrap the prompt's code block.
@@ -90,7 +90,7 @@ has never signed in is denied until they do.
 
 ### Identities and ownership
 
-Every beam action (`ls`, `add`, `exec`, `claude`, `publish`, `unpublish`,
+Every beam action (`ls`, `add`, `exec`, `claude`, `codex`, `publish`, `unpublish`,
 `rm`, `scp`, and all of Scotty) runs as the user:
 
 - `userIdentity` calls delegation `GenerateCerts` with the bot's `tbot`
@@ -133,6 +133,24 @@ Teleport v18.11.1 facts behind this design, confirmed in source:
   `beam-user` role grants app access by
   `labels["teleport.internal/beams/owner"] == user.metadata.name`. This
   labelling happens on the Cloud side, not in the OSS tree.
+
+### Coding agents (`/beams claude`, `/beams codex`)
+
+Both go through `runAgent` (`<name> [--continue|-c] <prompt...>`, timeout from
+`claude_timeout`/`codex_timeout`, default 15m) and run as one shell-quoted
+string over `tsh beams exec`:
+
+- Claude: `claude -p <claude_args> [--continue] <prompt>`; default
+  `claude_args` is `--dangerously-skip-permissions`.
+- Codex: `codex exec --skip-git-repo-check <codex_args> [resume --last]
+  <prompt>`; default `codex_args` is
+  `--dangerously-bypass-approvals-and-sandbox`. Flags were checked against
+  `codex-rs/exec/src/cli.rs`. With stdout not a terminal, `codex exec` prints
+  only the final message to stdout and progress to stderr, so Slack gets the
+  answer. Not yet tried live in a beam.
+
+Beams ship both CLIs preconfigured (`~/AGENTS.md` lists the Anthropic and
+OpenAI credentials). Scotty uses Claude only.
 
 ### Scotty (`beams_scotty.go`)
 

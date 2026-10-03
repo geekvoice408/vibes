@@ -18,6 +18,7 @@ profiles_dir = "/var/lib/teleport-slack/beams"
 identity_ttl = "15m"
 command_timeout = "2m"
 claude_timeout = "15m"
+codex_timeout = "15m"
 bot_name = "scotty"
 delegation_ttl = "168h"
 

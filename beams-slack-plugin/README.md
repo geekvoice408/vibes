@@ -41,6 +41,7 @@ Ask for a web page and get back a URL you can open:
 /beams add [--region=<region>]
 /beams exec <name> <command...>
 /beams claude <name> [--continue] <prompt...>
+/beams codex <name> [--continue] <prompt...>
 /beams publish <name> [--tcp]
 /beams unpublish <name>
 /beams rm <name>
@@ -55,8 +56,12 @@ Ask for a web page and get back a URL you can open:
 
 - `exec` runs over SSH as a single shell string, so quote commands that use
   `&&`, pipes, or redirects: `/beams exec crisp-array "cd /app && make"`.
-- `claude` runs `claude -p` in the beam (15 minute limit) and posts the answer.
-  `--continue` resumes the previous Claude conversation in that beam.
+- `claude` and `codex` run a coding agent in the beam and post its answer:
+  Claude Code (`claude -p`) or Codex (`codex exec`). Both come preinstalled
+  and preconfigured in every beam. Each run has a 15 minute limit, and
+  `--continue` (or `-c`) resumes that agent's previous conversation in the
+  beam, for example `/beams codex fabled-firefly -c add a dark mode`.
+  Scotty uses Claude Code.
 - `publish` exposes port 8080 in the beam as a Teleport app.
 - Interactive `/beams ssh` is not supported; use `exec`.
 - A brand-new beam takes a moment to accept SSH; commands retry for up to 3
@@ -275,6 +280,8 @@ Start from `config.toml.example`. The Beams settings:
 | `command_timeout` | `2m` | Limit for normal commands |
 | `claude_timeout` | `15m` | Limit for `/beams claude` and Scotty |
 | `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags. Print mode cannot ask for tool approval, and beams are throwaway runtimes. |
+| `codex_timeout` | `15m` | Limit for `/beams codex` |
+| `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.
