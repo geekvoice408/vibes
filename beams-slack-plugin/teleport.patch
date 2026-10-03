@@ -478,10 +478,10 @@ index 00000000000..de8abc00554
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..7dfd4771403
+index 00000000000..819cef238c4
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,635 @@
+@@ -0,0 +1,676 @@
 +package slack
 +
 +import (
@@ -499,6 +499,7 @@ index 00000000000..7dfd4771403
 +	"slices"
 +	"strings"
 +	"time"
++	"unicode"
 +
 +	"github.com/google/uuid"
 +	"github.com/gravitational/trace"
@@ -561,9 +562,9 @@ index 00000000000..7dfd4771403
 +	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) {
 +		return "", trace.BadParameter("invalid Slack identity")
 +	}
-+	words, err := shellwords.Parse(text)
++	words, err := parseCommand(text)
 +	if err != nil {
-+		return "", trace.BadParameter("invalid command: %v", err)
++		return "", trace.Wrap(err)
 +	}
 +	if len(words) == 0 || words[0] == "help" {
 +		return beamsHelp(), nil
@@ -962,6 +963,46 @@ index 00000000000..7dfd4771403
 +	return names
 +}
 +
++// parseCommand splits a slash command into words like a shell would. Agent
++// prompts are free text, so for claude and codex only the beam name and
++// --continue are split off and the rest is kept exactly as typed; apostrophes
++// such as "what's" then need no quoting.
++func parseCommand(text string) ([]string, error) {
++	if fields := strings.Fields(text); len(fields) > 0 && (fields[0] == "claude" || fields[0] == "codex") {
++		return agentWords(text), nil
++	}
++	words, err := shellwords.Parse(text)
++	if err != nil {
++		return nil, trace.BadParameter("couldn't read the command (%v); wrap arguments that contain quotes or apostrophes in double quotes", err)
++	}
++	return words, nil
++}
++
++// agentWords splits "<agent> <name> [--continue|-c] <prompt...>", keeping the
++// prompt as one word. A prompt wrapped entirely in quotes is unwrapped.
++func agentWords(text string) []string {
++	rest := strings.TrimSpace(text)
++	var words []string
++	for rest != "" && len(words) < 3 {
++		word, after := rest, ""
++		if i := strings.IndexFunc(rest, unicode.IsSpace); i >= 0 {
++			word, after = rest[:i], rest[i:]
++		}
++		if len(words) == 2 && word != "--continue" && word != "-c" {
++			break
++		}
++		words = append(words, word)
++		rest = strings.TrimSpace(after)
++	}
++	if len(rest) >= 2 && (rest[0] == '"' || rest[0] == '\'') && rest[len(rest)-1] == rest[0] {
++		rest = rest[1 : len(rest)-1]
++	}
++	if rest != "" {
++		words = append(words, rest)
++	}
++	return words
++}
++
 +// codeBlock shows multi-line tsh output as a Slack code block.
 +func codeBlock(output string) string {
 +	output = strings.TrimSpace(output)
@@ -1119,10 +1160,10 @@ index 00000000000..7dfd4771403
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..9e0d4b90d74
+index 00000000000..100d9cdff3b
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,222 @@
+@@ -0,0 +1,241 @@
 +package slack
 +
 +import (
@@ -1218,6 +1259,25 @@ index 00000000000..9e0d4b90d74
 +	require.Empty(t, beamTargets([]string{"rm"}))
 +}
 +
++func TestParseCommand(t *testing.T) {
++	for _, tc := range []struct {
++		text string
++		want []string
++	}{
++		{text: "codex mine what's in this directory?", want: []string{"codex", "mine", "what's in this directory?"}},
++		{text: "claude mine -c   don't stop", want: []string{"claude", "mine", "-c", "don't stop"}},
++		{text: `claude mine --continue "fix it"`, want: []string{"claude", "mine", "--continue", "fix it"}},
++		{text: "codex mine", want: []string{"codex", "mine"}},
++		{text: `exec mine "cd /app && make"`, want: []string{"exec", "mine", "cd /app && make"}},
++	} {
++		got, err := parseCommand(tc.text)
++		require.NoError(t, err, tc.text)
++		require.Equal(t, tc.want, got, tc.text)
++	}
++	_, err := parseCommand("exec mine echo don't")
++	require.ErrorContains(t, err, "wrap arguments that contain quotes or apostrophes in double quotes")
++}
++
 +func TestCodeBlock(t *testing.T) {
 +	require.Equal(t, "ok", codeBlock("ok\n"))
 +	require.Equal(t, "```line one\nline two```", codeBlock("line one\nline two\n"))
@@ -1282,7 +1342,7 @@ index 00000000000..9e0d4b90d74
 +	// After connecting, commands run as the user, never as the bot.
 +	_, err = runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
 +	require.NoError(t, err)
-+	for _, command := range []string{"add", "ls", "exec mine uname -a", "claude mine --continue \"what's failing?\"", "codex mine \"what's failing?\"", "codex mine -c fix it", "rm mine"} {
++	for _, command := range []string{"add", "ls", "exec mine uname -a", "claude mine --continue \"what's failing?\"", "codex mine what's failing?", "codex mine -c fix it", "rm mine"} {
 +		_, err := runner.Run(ctx, "T1", "UALICE", command)
 +		require.NoError(t, err, command)
 +	}

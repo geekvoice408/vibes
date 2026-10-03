@@ -136,6 +136,11 @@ Teleport v18.11.1 facts behind this design, confirmed in source:
 
 ### Coding agents (`/beams claude`, `/beams codex`)
 
+`parseCommand` splits `claude`/`codex` with `agentWords`: only the beam name
+and `--continue`/`-c` are split off and the prompt is kept as typed (outer
+quotes stripped), because shell-style parsing rejected prompts like
+"what's in this directory?". Other commands still use `shellwords`.
+
 Both go through `runAgent` (`<name> [--continue|-c] <prompt...>`, timeout from
 `claude_timeout`/`codex_timeout`, default 15m) and run as one shell-quoted
 string over `tsh beams exec`:

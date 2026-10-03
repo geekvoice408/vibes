@@ -56,12 +56,15 @@ Ask for a web page and get back a URL you can open:
 
 - `exec` runs over SSH as a single shell string, so quote commands that use
   `&&`, pipes, or redirects: `/beams exec crisp-array "cd /app && make"`.
+  Other commands are split into words like a shell, so wrap any argument
+  that contains an apostrophe in double quotes.
 - `claude` and `codex` run a coding agent in the beam and post its answer:
   Claude Code (`claude -p`) or Codex (`codex exec`). Both come preinstalled
   and preconfigured in every beam. Each run has a 15 minute limit, and
   `--continue` (or `-c`) resumes that agent's previous conversation in the
   beam, for example `/beams codex fabled-firefly -c add a dark mode`.
-  Scotty uses Claude Code.
+  Everything after the beam name (and `-c`) is sent as typed, so prompts can
+  contain apostrophes without quoting. Scotty uses Claude Code.
 - `publish` exposes port 8080 in the beam as a Teleport app.
 - Interactive `/beams ssh` is not supported; use `exec`.
 - A brand-new beam takes a moment to accept SSH; commands retry for up to 3
