@@ -120,7 +120,9 @@ Asking for another beam creates one, and the rest of that thread works in it:
 
 Scotty cannot delete beams; use `/beams rm`.
 
-Try asking Scotty to "beam me up".
+New to Beams? Ask Scotty "what can I do with beams?" for a quick overview of
+Beams and everything this bot can do with them. And try asking Scotty to
+"beam me up".
 
 ## Authorizing the plugin to act as you
 

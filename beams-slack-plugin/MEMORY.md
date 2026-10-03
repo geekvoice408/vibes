@@ -196,6 +196,11 @@ Easter egg: a request that is only "beam me up" (optionally "Scotty",
 `beamMeUp` regex) gets a random Scotty-style reply from `beamMeUpReplies`
 before any authorization or Teleport call, and no "On it" message.
 
+"What can I do with beams" style questions (`beamsIntroQuestion`) return the
+static `beamsIntro`, a summary of https://goteleport.com/docs/beams/ framed
+around this bot's commands, the same instant way (`isInstantRequest`). Update
+it if the Beams docs (limits, features) change.
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text

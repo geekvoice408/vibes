@@ -77,7 +77,7 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..1f464e0bd55
+index 00000000000..16fccad0858
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
 @@ -0,0 +1,292 @@
@@ -285,7 +285,7 @@ index 00000000000..1f464e0bd55
 +		"slack_channel_id", event.Channel,
 +	)
 +	log.InfoContext(ctx, "Handling Beams Slack message")
-+	if announce && !isBeamMeUp(request) {
++	if announce && !isInstantRequest(request) {
 +		a.reply(ctx, event, threadTS, "On it. Working in your beam; this can take a few minutes.")
 +	}
 +
@@ -1407,10 +1407,10 @@ index 00000000000..100d9cdff3b
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..02fc9332529
+index 00000000000..1d4edbbe37a
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,375 @@
+@@ -0,0 +1,406 @@
 +package slack
 +
 +import (
@@ -1488,6 +1488,34 @@ index 00000000000..02fc9332529
 +	return beamMeUp.MatchString(strings.TrimSpace(text))
 +}
 +
++// beamsIntroQuestion matches questions about what Beams are or what you can
++// do with them, answered with beamsIntro.
++var beamsIntroQuestion = regexp.MustCompile(`(?i)^\W*(what\s+(can|could)\s+(i|we|you)\s+do\s+with\s+(teleport\s+)?beams?|what\s+(are|is)\s+(teleport\s+)?beams|what\s+is\s+a\s+beam|what\s+are\s+beams\s+for)\W*$`)
++
++func isBeamsIntroQuestion(text string) bool {
++	return beamsIntroQuestion.MatchString(strings.TrimSpace(text))
++}
++
++// beamsIntro summarizes https://goteleport.com/docs/beams/ in terms of what
++// this Slack integration can do.
++const beamsIntro = `*Teleport Beams* are short-lived computers in the cloud where AI assistants can do work for you, safely. Each beam belongs to you, everything done in it is recorded under your name, and it cleans itself up after a day.
++
++Here's what you can do, right here in Slack:
++• *Ask me for things in plain English.* For example: "@Scotty make a webpage about things to do in Ballard and share it." I'll do the work in one of your beams and reply with a link.
++• *Keep going in the same thread* to make changes, like "make the title bigger."
++• *Share what you made.* Ask me to publish it and I'll give you a link you can open after signing in to Teleport.
++• *See your beams* by asking "how many beams do I have?"
++• *Start fresh* by asking for a new beam.
++
++Comfortable with commands? ` + "`/beams help`" + ` lists everything, including running Claude Code or Codex yourself.
++Learn more: https://goteleport.com/docs/beams/`
++
++// isInstantRequest reports whether Scotty answers a request immediately,
++// without Teleport or a Claude run.
++func isInstantRequest(text string) bool {
++	return isBeamMeUp(text) || isBeamsIntroQuestion(text)
++}
++
 +// Ask handles a natural-language request. It picks one of the user's beams
 +// (or creates one), hands the request to Claude Code there, and carries out
 +// the actions Claude asks for. Requests in the same Slack thread continue the
@@ -1498,6 +1526,9 @@ index 00000000000..02fc9332529
 +	}
 +	if isBeamMeUp(text) {
 +		return beamMeUpReplies[rand.IntN(len(beamMeUpReplies))], nil
++	}
++	if isBeamsIntroQuestion(text) {
++		return beamsIntro, nil
 +	}
 +	s, err := r.newSession(ctx, teamID, userID)
 +	if err != nil {
@@ -1788,10 +1819,10 @@ index 00000000000..02fc9332529
 +}
 diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
 new file mode 100644
-index 00000000000..e4b9e5ac3d7
+index 00000000000..414b2109445
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty_test.go
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,315 @@
 +package slack
 +
 +import (
@@ -2084,6 +2115,28 @@ index 00000000000..e4b9e5ac3d7
 +	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000600"}, "beam me up, Scotty")
 +	require.Len(t, bot.replies, 1, "no \"On it\" message for the easter egg")
 +	require.Contains(t, beamMeUpReplies, bot.replies[0])
++}
++
++func TestScottyBeamsIntro(t *testing.T) {
++	for _, text := range []string{"what can i do with beams", "What can I do with Teleport Beams?", "what could we do with beams", "what are beams", "what is a beam?", "what are beams for"} {
++		require.True(t, isBeamsIntroQuestion(text), text)
++		require.True(t, isInstantRequest(text), text)
++	}
++	for _, text := range []string{"how many beams do i have", "what beams do i have", "what can i do with beams to build a website"} {
++		require.False(t, isBeamsIntroQuestion(text), text)
++	}
++
++	runner := BeamsCommandRunner{Config: BeamsConfig{TSHPath: "/nonexistent/tsh", ProfilesDir: t.TempDir()}}
++	out, err := runner.Ask(t.Context(), "T1", "UNOBODY", "C1-1700000000.000700", "what can I do with beams?")
++	require.NoError(t, err)
++	require.Equal(t, beamsIntro, out)
++	require.Contains(t, out, "/beams help")
++	require.Contains(t, out, "https://goteleport.com/docs/beams/")
++
++	bot := &fakeScottyBot{}
++	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
++	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000800"}, "what are beams")
++	require.Equal(t, []string{beamsIntro}, bot.replies, "no \"On it\" message for instant answers")
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..b48a4703dd4 100644
