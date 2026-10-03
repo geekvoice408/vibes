@@ -32,6 +32,30 @@ Ask for a web page and get back a URL you can open:
 
 <img src="assets/screenshots/scotty-publish-webpage.png" alt="Scotty builds a page about Seattle's Ballard neighborhood in a beam and replies with the published URL" width="560">
 
+## Usage
+
+**Teleport Beams** are short-lived computers in the cloud where AI assistants
+can do work for you, safely. Each beam belongs to you, everything done in it
+is recorded under your name, and it cleans itself up after a day.
+
+Here's what you can do, right in Slack:
+
+- **Ask Scotty for things in plain English.** For example: "@Scotty make a
+  webpage about things to do in Ballard and share it." Scotty does the work in
+  one of your beams and replies with a link.
+- **Keep going in the same thread** to make changes, like "make the title
+  bigger."
+- **Share what you made.** Ask Scotty to publish it and you get a link you can
+  open after signing in to Teleport.
+- **See your beams** by asking "how many beams do I have?"
+- **Start fresh** by asking for a new beam.
+
+Comfortable with commands? `/beams help` lists everything, including running
+Claude Code or Codex yourself (see [Slash commands](#slash-commands)).
+
+Scotty gives this same overview if you ask him "what can I do with beams?".
+Learn more in the [Teleport Beams docs](https://goteleport.com/docs/beams/).
+
 ## Slash commands
 
 ```text
@@ -120,9 +144,8 @@ Asking for another beam creates one, and the rest of that thread works in it:
 
 Scotty cannot delete beams; use `/beams rm`.
 
-New to Beams? Ask Scotty "what can I do with beams?" for a quick overview of
-Beams and everything this bot can do with them. And try asking Scotty to
-"beam me up".
+Scotty is an engineer, not a transporter operator, so don't ask him for a
+lift.
 
 ## Authorizing the plugin to act as you
 
