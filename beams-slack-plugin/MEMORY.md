@@ -192,6 +192,10 @@ OpenAI credentials). Scotty uses Claude only.
    `tsh beams publish $BEAM_ALIAS` itself. `SCOTTY_ACTION` remains as the
    path the plugin controls.
 
+Easter egg: a request that is only "beam me up" (optionally "Scotty",
+`beamMeUp` regex) gets a random Scotty-style reply from `beamMeUpReplies`
+before any authorization or Teleport call, and no "On it" message.
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text

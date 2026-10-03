@@ -120,6 +120,8 @@ Asking for another beam creates one, and the rest of that thread works in it:
 
 Scotty cannot delete beams; use `/beams rm`.
 
+Try asking Scotty to "beam me up".
+
 ## Authorizing the plugin to act as you
 
 Teleport v18 does not let a bot impersonate an SSO user, and only you can

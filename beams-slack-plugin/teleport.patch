@@ -77,7 +77,7 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..e84f3780ac5
+index 00000000000..1f464e0bd55
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
 @@ -0,0 +1,292 @@
@@ -285,7 +285,7 @@ index 00000000000..e84f3780ac5
 +		"slack_channel_id", event.Channel,
 +	)
 +	log.InfoContext(ctx, "Handling Beams Slack message")
-+	if announce {
++	if announce && !isBeamMeUp(request) {
 +		a.reply(ctx, event, threadTS, "On it. Working in your beam; this can take a few minutes.")
 +	}
 +
@@ -1407,16 +1407,17 @@ index 00000000000..100d9cdff3b
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..1695da7dde1
+index 00000000000..02fc9332529
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,358 @@
+@@ -0,0 +1,375 @@
 +package slack
 +
 +import (
 +	"context"
 +	"encoding/json"
 +	"fmt"
++	"math/rand/v2"
 +	"os"
 +	"path/filepath"
 +	"regexp"
@@ -1474,6 +1475,19 @@ index 00000000000..1695da7dde1
 +	return err == nil
 +}
 +
++// beamMeUp matches the "beam me up" easter egg, with or without "Scotty".
++var beamMeUp = regexp.MustCompile(`(?i)^\W*beam\s+me\s+up\b[\s,]*(scotty)?\W*$`)
++
++var beamMeUpReplies = []string{
++	"Ach, I cannae beam ye anywhere, Captain! There's nae transporter wired into this Slack. What I *can* do is help ye securely create and run AI runtimes. Just say the word.",
++	"Beam ye up? With what, Captain? I've nae transporter room here, just Teleport. But I'll gladly help ye securely spin up and run AI runtimes, and that's a miracle I can actually deliver.",
++	"I'm givin' her all she's got, but she's no' a transporter, Captain! She's built tae help ye securely create and run AI runtimes. Tell me what ye need and I'll have it runnin' in no time.",
++}
++
++func isBeamMeUp(text string) bool {
++	return beamMeUp.MatchString(strings.TrimSpace(text))
++}
++
 +// Ask handles a natural-language request. It picks one of the user's beams
 +// (or creates one), hands the request to Claude Code there, and carries out
 +// the actions Claude asks for. Requests in the same Slack thread continue the
@@ -1481,6 +1495,9 @@ index 00000000000..1695da7dde1
 +func (r BeamsCommandRunner) Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error) {
 +	if !safeThreadKey.MatchString(threadKey) {
 +		return "", trace.BadParameter("invalid Slack thread")
++	}
++	if isBeamMeUp(text) {
++		return beamMeUpReplies[rand.IntN(len(beamMeUpReplies))], nil
 +	}
 +	s, err := r.newSession(ctx, teamID, userID)
 +	if err != nil {
@@ -1771,10 +1788,10 @@ index 00000000000..1695da7dde1
 +}
 diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
 new file mode 100644
-index 00000000000..b3797067d6b
+index 00000000000..e4b9e5ac3d7
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty_test.go
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,293 @@
 +package slack
 +
 +import (
@@ -2045,6 +2062,28 @@ index 00000000000..b3797067d6b
 +	calls, err := os.ReadFile(logPath)
 +	require.NoError(t, err)
 +	require.NotContains(t, string(calls), "beams exec", "list questions must not start Claude")
++}
++
++func TestScottyBeamMeUp(t *testing.T) {
++	for _, text := range []string{"beam me up", "Beam me up, Scotty!", "beam me up scotty", "  BEAM ME UP...  "} {
++		require.True(t, isBeamMeUp(text), text)
++	}
++	for _, text := range []string{"beam me up a webpage about Seattle", "create a new beam", "what's a beam?"} {
++		require.False(t, isBeamMeUp(text), text)
++	}
++
++	// Answered without Teleport or tsh, even for a user who has not connected.
++	runner := BeamsCommandRunner{Config: BeamsConfig{TSHPath: "/nonexistent/tsh", ProfilesDir: t.TempDir()}}
++	out, err := runner.Ask(t.Context(), "T1", "UNOBODY", "C1-1700000000.000500", "beam me up")
++	require.NoError(t, err)
++	require.Contains(t, beamMeUpReplies, out)
++	require.Contains(t, out, "securely")
++
++	bot := &fakeScottyBot{}
++	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
++	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000600"}, "beam me up, Scotty")
++	require.Len(t, bot.replies, 1, "no \"On it\" message for the easter egg")
++	require.Contains(t, beamMeUpReplies, bot.replies[0])
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..b48a4703dd4 100644
