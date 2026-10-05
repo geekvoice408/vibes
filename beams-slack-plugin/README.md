@@ -47,7 +47,13 @@ Here's what you can do, right in Slack:
 
 - **Ask the bot for things in plain English.** For example: "@Teleport Beams Bot make
   a webpage about things to do in Ballard and share it." Teleport Beams Bot does the work in
-  one of your beams and replies with a link.
+  one of your beams and replies with a link. Mention it in a channel, and it
+  answers in a thread under your message:
+
+  <img src="assets/screenshots/bot-ask-in-channel.png" alt="A user mentions @Teleport Beams Bot in a channel asking for a webpage about fun things to do in Seattle" width="560">
+
+  <img src="assets/screenshots/bot-ask-thread.png" alt="Teleport Beams Bot replies in the thread that it is working in the user's beam" width="480">
+
 - **Keep going in the same thread** to make changes, like "make the title
   bigger."
 - **Share what you made.** Ask the bot to publish it and you get a link you can
@@ -56,7 +62,9 @@ Here's what you can do, right in Slack:
 - **Start fresh** by asking for a new beam, and **clean up** by asking Teleport Beams Bot
   to "delete curious-shield" (or "delete this beam" in its thread).
 - **Pick your assistant.** Teleport Beams Bot uses Claude Code unless you say "use codex"
-  (or "use claude" to switch back).
+  (or "use claude" to switch back):
+
+  <img src="assets/screenshots/bot-codex.png" alt="A request ending in 'use codex' gets 'Using Codex for this thread.' and Codex's answer" width="480">
 
 Comfortable with commands? `/beams help` lists everything, including running
 Claude Code or Codex yourself (see [Slash commands](#slash-commands)).
