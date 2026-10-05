@@ -349,6 +349,30 @@ export BEAMS_SLACK_PLUGIN_IMAGE=<registry>/beams-slack-plugin:latest
 `docker-compose.yml` refuses to start without it. You can also put the value
 in a `.env` file next to `docker-compose.yml`.
 
+#### Building on the Docker host instead
+
+Without a registry, or when CI is down, build on the host that runs the stack
+and use the local tag. Only `Dockerfile` and `teleport.patch` are needed:
+
+```sh
+mkdir build && cp Dockerfile teleport.patch build/ && cd build
+docker build -t beams-slack-plugin:local-$(git rev-parse --short HEAD) .
+```
+
+(Run `git rev-parse` in your checkout, or pick any tag.) The build takes about
+ten minutes. Set `BEAMS_SLACK_PLUGIN_IMAGE` to that tag and recreate only the
+plugin:
+
+```sh
+docker compose up -d --no-deps teleport-slack
+```
+
+Use a tag that doesn't exist in any registry. Auto-updaters such as Watchtower
+pull newer images for running containers, so tagging a local build like a
+registry image (for example `.../beams-slack-plugin:latest`) could get it
+replaced with an older published build. To return to a registry image, set the
+variable back and `docker compose pull teleport-slack` before recreating.
+
 ### 4. Run it
 
 Run it with Docker Compose as below, or let Terraform deploy everything,
@@ -378,7 +402,8 @@ The stack has three services:
   `/var/lib/teleport/plugins/slack`, and per-user state lives in the external
   `beams-profiles` volume.
 
-To deploy a new image, build and push it again, then:
+To deploy a new image, build and push it again (or build it on the host, as
+above), then:
 
 ```sh
 docker compose pull teleport-slack && docker compose up -d --no-deps teleport-slack
@@ -533,7 +558,9 @@ The original repository has a GitHub Actions workflow
 requests and pushes `main` to a private GitHub Container Registry package with
 tags `latest`, `main`, and `sha-<commit>`. That package is not publicly
 accessible, so use your own registry as described in
-[Build and host the image](#3-build-and-host-the-image). The image bundles
+[Build and host the image](#3-build-and-host-the-image). If GitHub Actions is
+unavailable, [build on the Docker host](#building-on-the-docker-host-instead)
+instead. The image bundles
 `tsh` 18.11.3; override the `TSH_VERSION` build argument when the tenant is
 upgraded.
 

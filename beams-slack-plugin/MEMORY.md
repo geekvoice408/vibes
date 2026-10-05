@@ -55,6 +55,9 @@ set up with; renaming that bot would invalidate users' delegation sessions.
 - Versions: source `v18.11.1`, bundled `tsh` 18.11.3, `tbot` 18.11.3.
   18.11.3 binaries are published but GitHub has no `v18.11.3` (or `v18.11.2`)
   tag, so the patch stays on `v18.11.1` until a newer public tag exists.
+- When CI is unavailable, build on the Docker host with a local-only tag
+  (README "Building on the Docker host instead"); avoid registry-style tags
+  because Watchtower-style updaters would replace them.
 - Run tests with `GOTOOLCHAIN=go1.25.14`. Go 1.27 crashes at init inside
   `charlievieth/strcase`, which is unrelated to this code.
 - Earlier work was done by Codex in `/home/beams/work/...`. Those paths are
@@ -312,6 +315,12 @@ anywhere; ventura still uses Compose.
   deleted.
 - Deploy a new image: `docker compose pull teleport-slack && docker compose up
   -d --no-deps teleport-slack`.
+- 2026-10-05: GitHub Actions had an incident, so the plugin image was built on
+  ventura (`/usr/local/docker/beams-hackathon/build/`, tag
+  `beams-slack-plugin:local-398933f`) and compose's `teleport-slack` image
+  line points at that local tag (backup `docker-compose.yml.bak-*`). Switch
+  back to `ghcr.io/geekvoice408/beams-slack-plugin:latest` and pull once CI
+  works. Watchtower runs on ventura, which is why the local tag is distinct.
 
 Test identities: Slack workspace `T03PXFLJF`, user `U049LDB6K` mapped to
 `paul@geekvoice.net` (Google SSO), test channel `C0C5D5M81U7`.
