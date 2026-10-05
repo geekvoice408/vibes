@@ -21,10 +21,11 @@ over Socket Mode, and needs no inbound ports or public URL.
 - **`/beams` slash commands**: list, create, run commands in, publish, copy
   files to, and delete beams. Replies are private to the person who ran them.
 - **Teleport Beams Bot**: mention `@Teleport Beams Bot`, DM it, or start a
-  message with "Teleport Beams Bot".
-  Teleport Beams Bot picks or creates one of your beams, runs Claude Code or Codex inside
-  it with your request, publishes the result if asked, and replies in a
-  thread. Replies in that thread continue the same beam and conversation.
+  message with "Teleport Beams Bot". Questions get a quick answer from Claude
+  or Codex through Teleport, with every request in the audit log. Requests
+  that need a computer go to one of your beams, where Claude Code or Codex does
+  the work, publishes the result if asked, and replies in a thread. Replies in
+  that thread continue the same conversation.
 - **Who you are**: the plugin looks up your Slack email, finds the Teleport
   user with that username, and lets you in only if that user has the
   configured role (`beam-user`). No list of Slack IDs to maintain.
@@ -55,15 +56,18 @@ Here's what you can do, right in Slack:
   <img src="assets/screenshots/bot-ask-thread.png" alt="Teleport Beams Bot replies in the thread that it is working in the user's beam" width="480">
 
 - **Just ask questions.** Something like "what should I eat for lunch?" gets a
-  quick answer from Claude (or Codex) without starting a beam. Requests that
-  need a computer, like writing code or building a page, go to a beam.
+  quick answer from Claude (or Codex) without starting a beam, and follow-ups
+  in the thread keep the conversation going. Requests that need a computer,
+  like writing code or building a page, go to a beam automatically. Every
+  request is recorded in Teleport's audit log under your name.
 - **Keep going in the same thread** to make changes, like "make the title
   bigger."
 - **Share what you made.** Ask the bot to publish it and you get a link you can
   open after signing in to Teleport.
 - **See your beams** by asking "how many beams do I have?"
 - **Start fresh** by asking for a new beam, and **clean up** by asking Teleport Beams Bot
-  to "delete curious-shield" (or "delete this beam" in its thread).
+  to "delete curious-shield", "delete this beam" in its thread, or "delete
+  all my beams".
 - **Pick your assistant.** Teleport Beams Bot uses Claude Code unless you say "use codex"
   (or "use claude" to switch back):
 
