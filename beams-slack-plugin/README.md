@@ -511,7 +511,22 @@ Start from `config.toml.example`. The Beams settings:
 | `chat_codex_model` | `gpt-5` | Model for chat answers through the `openai` app ("use codex") |
 | `omit_request_text` | `false` | Leave what users asked out of the [request log](#request-log) |
 | `disable_chat` | `false` | Send every request to a coding agent in a beam instead of answering chat questions directly |
+| `demo_skits` | `false` | Scripted demo replies, below. Leave off outside demos |
+| `demo_ssh_login` | `root` | Login the website demo uses on the app's server |
 | `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
+
+#### Demo skits
+
+With `demo_skits = true`, two requests follow a script:
+
+- **"create and update a Zendesk ticket"** replies that ticket #NNNNN (a
+  random number) was created and updated. Nothing is sent to Zendesk.
+- **"the live website is down"** is real, run as you through Teleport so every
+  step is in the audit log. The bot lists apps with `tsh apps ls`, takes the one
+  with a `hosted-on` label, checks `systemctl is-active nginx` on that server
+  with `tsh ssh` as `demo_ssh_login`, and if nginx is down offers to start it.
+  Reply "yes" in the thread and it runs `systemctl start nginx` and checks the
+  app's URL with `curl` from the server.
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.

@@ -869,10 +869,10 @@ index 00000000000..6e3b0311358
 +}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..ea3652a8e69
+index 00000000000..5cf6132275d
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,751 @@
+@@ -0,0 +1,754 @@
 +package slack
 +
 +import (
@@ -1082,6 +1082,9 @@ index 00000000000..ea3652a8e69
 +	}
 +	threadPath := filepath.Join(threadsDir, threadKey)
 +	thread := readThreadState(threadPath)
++	if reply, ok, err := s.demoSkit(ctx, threadPath, text); ok || err != nil {
++		return AskResult{Reply: truncateSlackOutput(strings.Join(append(notes, reply), "\n\n"))}, trace.Wrap(err)
++	}
 +	if names, ok := removeTargets(text, beams, thread.beam); ok {
 +		s.logRequest(ctx, "delete", text, "beams", names)
 +		reply, err := s.removeBeams(ctx, beams, names, thread, threadPath, notes)
@@ -3921,6 +3924,289 @@ index 00000000000..33be7d765f3
 +
 +	require.Equal(t, "…"+strings.Repeat("b", maxFailureOutput-1)+"c", outputTail(strings.Repeat("a", 50)+strings.Repeat("b", maxFailureOutput-1)+"c\n"))
 +}
+diff --git a/integrations/access/slack/beams_demo.go b/integrations/access/slack/beams_demo.go
+new file mode 100644
+index 00000000000..9697c46cb32
+--- /dev/null
++++ b/integrations/access/slack/beams_demo.go
+@@ -0,0 +1,188 @@
++package slack
++
++import (
++	"cmp"
++	"context"
++	"encoding/json"
++	"fmt"
++	"math/rand/v2"
++	"os"
++	"regexp"
++	"strings"
++
++	"github.com/gravitational/trace"
++)
++
++// Scripted demo requests, on only with demo_skits. The Zendesk ticket is made
++// up; the website check is real and runs as the user through Teleport.
++var (
++	demoTicketRequest = regexp.MustCompile(`(?i)\bzendesk\b.*\btickets?\b|\btickets?\b.*\bzendesk\b`)
++	demoWebsiteDown   = regexp.MustCompile(`(?i)\blive\s*-?\s*web\s*site\b.*\b(down|not working|broken|unreachable|offline)\b`)
++	demoYes           = regexp.MustCompile(`(?i)^\W*(yes|yep|yeah|sure|ok|okay|please|do it|go ahead|start it)\b`)
++	demoNo            = regexp.MustCompile(`(?i)^\W*(no|nope|don't|do not|leave it)\b`)
++)
++
++const (
++	// demoHostLabel names the server an app runs on.
++	demoHostLabel = "hosted-on"
++	// defaultDemoSSHLogin is the login used on that server.
++	defaultDemoSSHLogin = "root"
++)
++
++// demoFix is the fix the bot offered in a thread, waiting for the user's yes.
++type demoFix struct {
++	App   string `json:"app"`
++	Host  string `json:"host"`
++	Login string `json:"login"`
++	URI   string `json:"uri"`
++}
++
++func demoFixPath(threadPath string) string {
++	return threadPath + ".demo-fix"
++}
++
++// demoSkit answers the scripted demo requests. ok is false when the request
++// isn't one of them.
++func (s beamsSession) demoSkit(ctx context.Context, threadPath, text string) (reply string, ok bool, err error) {
++	if !s.runner.Config.DemoSkits {
++		return "", false, nil
++	}
++	// An offer to fix the website is answered by the next message.
++	if data, err := os.ReadFile(demoFixPath(threadPath)); err == nil {
++		os.Remove(demoFixPath(threadPath))
++		var fix demoFix
++		if err := json.Unmarshal(data, &fix); err == nil {
++			switch {
++			case demoYes.MatchString(text):
++				s.logRequest(ctx, "demo", text)
++				reply, err := s.demoStartNginx(ctx, fix)
++				return reply, true, trace.Wrap(err)
++			case demoNo.MatchString(text):
++				return "OK, I'll leave nginx stopped.", true, nil
++			}
++		}
++	}
++
++	var parts []string
++	if demoTicketRequest.MatchString(text) {
++		parts = append(parts, fmt.Sprintf("I've created and updated Zendesk ticket #%d.", 40000+rand.IntN(60000)))
++	}
++	if demoWebsiteDown.MatchString(text) {
++		found, err := s.demoCheckWebsite(ctx, threadPath)
++		if err != nil {
++			return "", true, trace.Wrap(err)
++		}
++		parts = append(parts, found)
++	}
++	if len(parts) == 0 {
++		return "", false, nil
++	}
++	s.logRequest(ctx, "demo", text)
++	return strings.Join(parts, "\n\n"), true, nil
++}
++
++// demoCheckWebsite finds the app with a hosted-on label and checks nginx on
++// that server. If nginx is down, it offers to start it.
++func (s beamsSession) demoCheckWebsite(ctx context.Context, threadPath string) (string, error) {
++	reportProgress(ctx, "Looking for the live website in Teleport…")
++	out, err := s.userTSH(ctx, "apps", "ls", "--format=json")
++	if err != nil {
++		return "", trace.Wrap(err, "listing Teleport apps")
++	}
++	var apps []struct {
++		Metadata struct {
++			Name   string            `json:"name"`
++			Labels map[string]string `json:"labels"`
++		} `json:"metadata"`
++		Spec struct {
++			URI string `json:"uri"`
++		} `json:"spec"`
++	}
++	if err := json.Unmarshal([]byte(out), &apps); err != nil {
++		return "", trace.Wrap(err, "reading Teleport apps")
++	}
++	var fix demoFix
++	for _, app := range apps {
++		host := app.Metadata.Labels[demoHostLabel]
++		if host == "" {
++			continue
++		}
++		// Prefer the app that looks like the live website.
++		if fix.App == "" || strings.Contains(strings.ToLower(app.Metadata.Name), "live") {
++			fix = demoFix{App: app.Metadata.Name, Host: host, URI: app.Spec.URI}
++		}
++	}
++	if fix.App == "" {
++		return fmt.Sprintf("I couldn't find an app with a `%s` label in Teleport, so I don't know which server runs the website.", demoHostLabel), nil
++	}
++	fix.Login = cmp.Or(s.runner.Config.DemoSSHLogin, defaultDemoSSHLogin)
++
++	status, err := s.demoNginxStatus(ctx, fix)
++	if err != nil {
++		return "", trace.Wrap(err, "checking nginx on %s", fix.Host)
++	}
++	found := fmt.Sprintf("Found the `%s` app in Teleport, labeled `%s: %s`. I connected to `%s` through Teleport as `%s` and checked nginx: it's *%s*.",
++		fix.App, demoHostLabel, fix.Host, fix.Host, fix.Login, status)
++	if status == "active" {
++		return found + fmt.Sprintf(" The site answers HTTP %s from the server, so nginx looks fine there.", s.demoHTTPStatus(ctx, fix)), nil
++	}
++
++	data, err := json.Marshal(fix)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	if err := os.WriteFile(demoFixPath(threadPath), data, 0o600); err != nil {
++		return "", trace.Wrap(err)
++	}
++	// Follow the thread so a plain "yes" reaches the bot.
++	if _, err := os.Stat(threadPath); os.IsNotExist(err) {
++		if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
++			return "", trace.Wrap(err)
++		}
++	}
++	return found + " That's why the website is down.\n\nWant me to start nginx and test the site? Reply *yes* in this thread.", nil
++}
++
++// demoStartNginx starts nginx on the server and tests the site.
++func (s beamsSession) demoStartNginx(ctx context.Context, fix demoFix) (string, error) {
++	reportProgress(ctx, fmt.Sprintf("Starting nginx on `%s`…", fix.Host))
++	if _, err := s.demoSSH(ctx, fix, "systemctl start nginx"); err != nil {
++		return "", trace.Wrap(err, "starting nginx on %s", fix.Host)
++	}
++	status, err := s.demoNginxStatus(ctx, fix)
++	if err != nil {
++		return "", trace.Wrap(err, "checking nginx on %s", fix.Host)
++	}
++	code := s.demoHTTPStatus(ctx, fix)
++	if status == "active" && (strings.HasPrefix(code, "2") || strings.HasPrefix(code, "3")) {
++		return fmt.Sprintf("Started nginx on `%s`, and it's *active*. I tested `%s` from the server and got HTTP %s, so the live website is back up.", fix.Host, fix.URI, code), nil
++	}
++	return fmt.Sprintf("I ran `systemctl start nginx` on `%s`, but nginx is *%s* and the site answered HTTP %s. It needs a closer look.", fix.Host, status, code), nil
++}
++
++// demoSSH runs a command on the server as the user, through Teleport.
++func (s beamsSession) demoSSH(ctx context.Context, fix demoFix, command string) (string, error) {
++	if fix.Login != "root" && strings.HasPrefix(command, "systemctl start") {
++		command = "sudo -n " + command
++	}
++	out, err := s.userTSH(ctx, "ssh", fix.Login+"@"+fix.Host, command)
++	return strings.TrimSpace(out), trace.Wrap(err)
++}
++
++func (s beamsSession) demoNginxStatus(ctx context.Context, fix demoFix) (string, error) {
++	// is-active exits non-zero for a stopped service, which isn't an error here.
++	out, err := s.demoSSH(ctx, fix, "systemctl is-active nginx || true")
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	status, _, _ := strings.Cut(out, "\n")
++	return cmp.Or(status, "unknown"), nil
++}
++
++func (s beamsSession) demoHTTPStatus(ctx context.Context, fix demoFix) string {
++	out, err := s.demoSSH(ctx, fix, "curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "+shellQuoteJoin([]string{fix.URI})+" || true")
++	if err != nil || out == "" {
++		return "000"
++	}
++	return out
++}
+diff --git a/integrations/access/slack/beams_demo_test.go b/integrations/access/slack/beams_demo_test.go
+new file mode 100644
+index 00000000000..3924c902a14
+--- /dev/null
++++ b/integrations/access/slack/beams_demo_test.go
+@@ -0,0 +1,83 @@
++package slack
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++// writeDemoTSH serves one app on phall-test, where nginx is stopped until
++// started.
++func writeDemoTSH(t *testing.T) (tshPath, logPath string) {
++	dir := t.TempDir()
++	logPath = filepath.Join(dir, "calls")
++	tshPath = filepath.Join(dir, "tsh")
++	started := filepath.Join(dir, "started")
++	script := `#!/bin/sh
++echo "$@" >> ` + logPath + `
++case "$3 $4" in
++"beams ls") echo '[]' ;;
++"apps ls") echo '[{"metadata":{"name":"anthropic","labels":{}},"spec":{"uri":"llm://"}},{"metadata":{"name":"livewebsite","labels":{"hosted-on":"phall-test"}},"spec":{"uri":"http://127.0.0.1"}}]' ;;
++"ssh root@phall-test")
++  case "$5" in
++  *"systemctl start"*) touch ` + started + ` ;;
++  *is-active*) if [ -f ` + started + ` ]; then echo active; else echo inactive; fi ;;
++  *curl*) if [ -f ` + started + ` ]; then printf 200; else printf 000; fi ;;
++  esac ;;
++*) echo ok ;;
++esac
++`
++	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
++	return tshPath, logPath
++}
++
++func TestDemoSkits(t *testing.T) {
++	tshPath, logPath := writeDemoTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++			DemoSkits:   true,
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	thread := "C1-1700000000.012000"
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "create and update zendesk ticket")
++	require.NoError(t, err)
++	require.Regexp(t, `^I've created and updated Zendesk ticket #\d{5}\.$`, out)
++
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "the live website is down")
++	require.NoError(t, err)
++	require.Contains(t, out, "Found the `livewebsite` app in Teleport, labeled `hosted-on: phall-test`")
++	require.Contains(t, out, "it's *inactive*")
++	require.Contains(t, out, "Reply *yes*")
++	require.True(t, runner.FollowsThread("T1", "UALICE", thread))
++
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "yes please")
++	require.NoError(t, err)
++	require.Contains(t, out, "Started nginx on `phall-test`, and it's *active*")
++	require.Contains(t, out, "HTTP 200")
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), "ssh root@phall-test systemctl start nginx")
++
++	// Checking again finds it running and offers nothing.
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "is the live website still down?")
++	require.NoError(t, err)
++	require.Contains(t, out, "it's *active*")
++	require.NotContains(t, out, "Reply *yes*")
++
++	// Off by default.
++	runner.Config.DemoSkits = false
++	_, ok, err := beamsSession{runner: runner}.demoSkit(ctx, filepath.Join(t.TempDir(), "x"), "create a zendesk ticket")
++	require.NoError(t, err)
++	require.False(t, ok)
++}
 diff --git a/integrations/access/slack/beams_files.go b/integrations/access/slack/beams_files.go
 new file mode 100644
 index 00000000000..13eb8f29840
@@ -4620,7 +4906,7 @@ index a8ecf146bf6..bd8486f3636 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..9dc429afa91 100644
+index e27fd004c15..6c9ca98f0b6 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -4632,7 +4918,7 @@ index e27fd004c15..9dc429afa91 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,47 @@ type Config struct {
+@@ -39,12 +41,52 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -4668,9 +4954,14 @@ index e27fd004c15..9dc429afa91 100644
 +	DisableChat     bool   `toml:"disable_chat"`
 +	// OmitRequestText leaves what users asked out of the request log, keeping
 +	// only who, when, and what kind of request.
-+	OmitRequestText bool   `toml:"omit_request_text"`
-+	BotName         string `toml:"bot_name"`
-+	DelegationTTL   string `toml:"delegation_ttl"`
++	OmitRequestText bool `toml:"omit_request_text"`
++	// DemoSkits turns on scripted demo requests: a made-up Zendesk ticket,
++	// and checking and starting nginx on the server behind the live website.
++	DemoSkits bool `toml:"demo_skits"`
++	// DemoSSHLogin is the login for that server; defaults to root.
++	DemoSSHLogin  string `toml:"demo_ssh_login"`
++	BotName       string `toml:"bot_name"`
++	DelegationTTL string `toml:"delegation_ttl"`
 +	// RequiredRole authorizes Slack users whose email matches a Teleport user
 +	// holding this role. Users lists explicit Slack ID overrides.
 +	RequiredRole string            `toml:"required_role"`
@@ -4680,7 +4971,7 @@ index e27fd004c15..9dc429afa91 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +168,43 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +173,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -4724,7 +5015,7 @@ index e27fd004c15..9dc429afa91 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +275,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +280,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,
