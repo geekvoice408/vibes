@@ -247,8 +247,12 @@ session for the user via the bot), and POSTs to `https://<public_addr>/v1/messag
 (`x-api-key: teleport`) or `/v1/chat/completions` (`Bearer teleport`); Teleport
 injects the real key and maps model names (Bedrock Mantle behind the scenes).
 `tsh proxy app` cannot be used: tbot and delegated certs both carry
-disallow-reissue. A reply of exactly `HANDOFF` sends the request to a beam
-with the chat history in the prompt. History lives in
+disallow-reissue. A reply with a line that is just `HANDOFF` (`isHandoff`;
+models sometimes write a sentence first, which once leaked "HANDOFF" into
+Slack) sends the request to a beam with the chat history in the prompt; any
+text around it is dropped. The prompt keeps commands and short scripts the
+user runs themselves (e.g. a curl check) as chat answers; Paul wanted that
+rather than a beam for "write a script to test connectivity". History lives in
 `<profile>/threads/<key>.chat` (last 20 messages). Only "no LLM app" errors
 (NotFound/NotImplemented) fall back to the beam path; model errors are
 reported. The OpenAI app is Bedrock-backed on the test tenant (`gpt-5` maps

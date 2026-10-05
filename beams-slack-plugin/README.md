@@ -193,9 +193,11 @@ the request through Teleport's app proxy, which adds the provider's API key.
 Every chat request is an app session in Teleport's audit log, attributed to you
 and the bot.
 
-The model is told to hand off anything that needs a computer: writing,
-running, or testing code, creating files or pages, installing software,
-publishing, or managing beams. Those requests continue in a beam as described
+The model is told to hand off anything that needs a computer: running or
+testing code for you, creating files or pages, installing software,
+publishing, or managing beams. A command or short script you can run yourself,
+such as a `curl` check that a site is up, comes back as a chat answer instead.
+Handed-off requests continue in a beam as described
 below, with the chat so far passed to the coding agent as context. Once a
 thread is working in a beam, follow-ups go to the agent in that beam, and
 naming one of your beams always goes straight to it. If the tenant has no

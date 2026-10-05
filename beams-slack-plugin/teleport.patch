@@ -2126,10 +2126,10 @@ index 00000000000..abc52d164af
 +}
 diff --git a/integrations/access/slack/beams_chat.go b/integrations/access/slack/beams_chat.go
 new file mode 100644
-index 00000000000..33443eb858d
+index 00000000000..0ba730dd5e4
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat.go
-@@ -0,0 +1,370 @@
+@@ -0,0 +1,383 @@
 +package slack
 +
 +import (
@@ -2202,10 +2202,11 @@ index 00000000000..33443eb858d
 +func chatSystemPrompt(username string) string {
 +	return fmt.Sprintf(`You are Teleport Beams Bot, a friendly assistant in Slack, talking with %s. Answer conversationally and concisely, using Slack formatting (*bold*, _italic_, `+"`code`"+`, and • for bullets).
 +
-+Some requests need a computer: writing, running, or testing code; creating or editing files, webpages, or apps; installing software; publishing something; or creating, listing, or deleting Teleport Beams. For those, reply with exactly %s and nothing else (after any tell lines), and a coding agent in a beam will take over. Short code snippets inside an answer are fine; hand off only when something has to be built, run, or saved.
++Some requests need a computer: running or testing code for the user; building or editing files, webpages, or apps; installing software; publishing something; or creating, listing, or deleting Teleport Beams. For those, reply with exactly %s and nothing else (apart from any tell lines), and a coding agent in a beam will take over.
++Answer directly instead when the user wants a command or a short script they can run themselves, such as a quick curl command to check whether a website is up: put it in a code block with a line on how to use it. Hand off only when something has to be run, built, or saved for them, or the code is too long for a Slack message.
 +
 +`, username, chatHandoff) + tellInstructions + `
-+Put tell lines first, then reply as usual: a short acknowledgement, or ` + chatHandoff + ` if the rest of the request needs a computer.`
++Put tell lines first. After them, answer the rest of the request, or reply with only ` + chatHandoff + ` if it needs a computer. If passing the message on was the whole request, a short acknowledgement is enough.`
 +}
 +
 +// chatTurn answers a request in a chat thread. It returns handoff when the
@@ -2226,7 +2227,7 @@ index 00000000000..33443eb858d
 +		return "", false, history, nil, trace.Wrap(err)
 +	}
 +	reply, actions = parseBotActions(reply)
-+	if strings.HasPrefix(reply, chatHandoff) {
++	if isHandoff(reply) {
 +		return "", true, history, actions, nil
 +	}
 +
@@ -2242,6 +2243,18 @@ index 00000000000..33443eb858d
 +		return "", false, history, nil, trace.Wrap(err)
 +	}
 +	return reply, false, history, actions, nil
++}
++
++// isHandoff reports whether a chat reply hands the request to a coding agent.
++// Models sometimes add a sentence before the marker, so any line that is just
++// the marker counts.
++func isHandoff(reply string) bool {
++	for _, line := range strings.Split(reply, "\n") {
++		if strings.Trim(line, " \t*_`.") == chatHandoff {
++			return true
++		}
++	}
++	return false
 +}
 +
 +func readChatHistory(path string) []chatMessage {
@@ -2502,10 +2515,10 @@ index 00000000000..33443eb858d
 +}
 diff --git a/integrations/access/slack/beams_chat_test.go b/integrations/access/slack/beams_chat_test.go
 new file mode 100644
-index 00000000000..b13626dacb7
+index 00000000000..5af4ffc7512
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat_test.go
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,369 @@
 +package slack
 +
 +import (
@@ -2866,6 +2879,14 @@ index 00000000000..b13626dacb7
 +		return strings.Contains(string(calls), `beams exec mine 'printf'`) &&
 +			strings.Contains(string(calls), `'Teleport Beams Bot chat (Claude Code)' 'Q: what'\''s for lunch?' 'A: Try the pho place.'`)
 +	}, 5*time.Second, 20*time.Millisecond)
++}
++
++func TestIsHandoff(t *testing.T) {
++	require.True(t, isHandoff("HANDOFF"))
++	require.True(t, isHandoff("Got it, I've let Anna know. Now let's write that script.\n\nHANDOFF"))
++	require.True(t, isHandoff("*HANDOFF*"))
++	require.False(t, isHandoff("Run this:\n```\ncurl -sS -o /dev/null -w '%{http_code}' https://example.com\n```"))
++	require.False(t, isHandoff("I'll do the HANDOFF later"))
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
@@ -4173,10 +4194,10 @@ index 00000000000..e82f25db53f
 +}
 diff --git a/integrations/access/slack/beams_tell_test.go b/integrations/access/slack/beams_tell_test.go
 new file mode 100644
-index 00000000000..6aecf5f4e9d
+index 00000000000..329aa63f990
 --- /dev/null
 +++ b/integrations/access/slack/beams_tell_test.go
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,151 @@
 +package slack
 +
 +import (
@@ -4316,6 +4337,17 @@ index 00000000000..6aecf5f4e9d
 +	require.Empty(t, s.tell(t.Context(), "C1", "1.2", "tell anna.m :: twice", told))
 +	require.Len(t, slack.posts, 2)
 +	require.True(t, strings.HasSuffix(slack.posts[1], "once"))
++}
++
++func TestBotHandsOffAfterASentence(t *testing.T) {
++	runner, slack, logPath := tellRunner(t, "BEAMS_BOT_ACTION: tell Anna :: The website is down. We're on it.\nGot it, I've let Anna know. Now let's write that script.\n\nHANDOFF")
++	out, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.011000", "tell Anna the website is down and set up a monitor")
++	require.NoError(t, err)
++	require.NotContains(t, out, "HANDOFF")
++	require.Len(t, slack.posts, 1)
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), "beams exec mine 'claude'")
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..5914ba3c4f6 100644
