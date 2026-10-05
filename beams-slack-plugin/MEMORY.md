@@ -323,7 +323,11 @@ URI http://127.0.0.1) on node `phall-test` (Debian 13, nginx). Paul's
 Slack-matched user paul@geekvoice.net has no `root` login from SSO traits
 (the `access` role's logins come from internal/external traits) and there is
 no `paul` user on phall-test, so the website skit needs a login granted.
-Ventura's config.toml has `demo_skits = true`.
+Ventura's config.toml has `demo_skits = true` and `demo_ssh_login =
+"paul_hall"` (Paul's choice, not root). paul_hall exists on phall-test
+(uid 1005, groups adm/docker/lxd) but has no sudo, so starting nginx needs a
+sudoers rule for `systemctl start nginx`, and paul@geekvoice.net needs the
+paul_hall login in Teleport.
 
 Request log (`beams_audit.go`): plugins can't call `EmitAuditEvent` (only
 built-in Teleport servers can), and `app.session.llm_request` has
