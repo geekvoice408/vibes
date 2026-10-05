@@ -19,7 +19,7 @@ identity_ttl = "15m"
 command_timeout = "2m"
 claude_timeout = "15m"
 codex_timeout = "15m"
-bot_name = "scotty"
+bot_name = "teleport-beams-bot"
 delegation_ttl = "168h"
 
 required_role = "beam-user"

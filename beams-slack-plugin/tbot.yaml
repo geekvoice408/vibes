@@ -2,7 +2,7 @@ version: v2
 proxy_server: example-beams-tenant.beams.sh:443
 onboarding:
   join_method: token
-  # File containing the join token from `tctl bots instances add scotty`.
+  # File containing the join token from `tctl bots instances add teleport-beams-bot`.
   # It is only used for the first join; tbot then renews from its storage.
   token: /secrets/tbot-token
 storage:

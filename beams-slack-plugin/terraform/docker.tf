@@ -15,7 +15,7 @@ resource "docker_volume" "plugin_identity" {
   name = "${var.name_prefix}-plugin-identity"
 }
 
-# Per-user delegation sessions and Scotty thread state.
+# Per-user delegation sessions and bot thread state.
 resource "docker_volume" "beams_profiles" {
   name = "${var.name_prefix}-beams-profiles"
 }

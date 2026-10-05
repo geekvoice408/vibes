@@ -6,7 +6,7 @@ variable "teleport_proxy" {
 variable "bot_name" {
   description = "Machine ID bot the plugin runs as. Users name it in `tsh delegation create-session --bot=...`."
   type        = string
-  default     = "scotty"
+  default     = "teleport-beams-bot"
 }
 
 variable "bot_roles" {

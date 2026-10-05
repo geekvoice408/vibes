@@ -77,7 +77,7 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..16fccad0858
+index 00000000000..53b9c9effec
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
 @@ -0,0 +1,292 @@
@@ -131,7 +131,7 @@ index 00000000000..16fccad0858
 +	job              lib.ServiceJob
 +	// seen drops duplicate deliveries of the same Slack message.
 +	seen *recentSet
-+	// threads runs one Scotty request at a time per Slack thread.
++	// threads runs one bot request at a time per Slack thread.
 +	threads *threadQueue
 +}
 +
@@ -214,7 +214,7 @@ index 00000000000..16fccad0858
 +				case BeamsMessageEvent:
 +					followUp := event.EventType == "message" && event.ThreadTS != "" &&
 +						a.runner.FollowsThread(event.TeamID, event.User, event.Channel+"-"+event.ThreadTS)
-+					if request, ok := scottyRequest(event, followUp); ok && a.seen.add(event.Channel+"-"+event.TS) {
++					if request, ok := botRequest(event, followUp); ok && a.seen.add(event.Channel+"-"+event.TS) {
 +						go a.handleMessage(ctx, event, request)
 +					}
 +				}
@@ -254,8 +254,8 @@ index 00000000000..16fccad0858
 +	}
 +}
 +
-+// Busy-thread notice for messages that arrive while Scotty is still working.
-+const scottyBusyReply = "Still working on your earlier request; I'll pick this up when it's done."
++// Busy-thread notice for messages that arrive while the bot is still working.
++const botBusyReply = "Still working on your earlier request; I'll pick this up when it's done."
 +
 +func (a *BeamsApp) handleMessage(ctx context.Context, event BeamsMessageEvent, request string) {
 +	threadTS := cmp.Or(event.ThreadTS, event.TS)
@@ -264,7 +264,7 @@ index 00000000000..16fccad0858
 +	// each start without the other's context. Messages that arrive meanwhile
 +	// are answered right away and the newest one runs next.
 +	if !a.threads.start(key, queuedMessage{event: event, request: request}) {
-+		a.reply(ctx, event, threadTS, scottyBusyReply)
++		a.reply(ctx, event, threadTS, botBusyReply)
 +		return
 +	}
 +	announce := true
@@ -308,7 +308,7 @@ index 00000000000..16fccad0858
 +	request string
 +}
 +
-+// threadQueue tracks which threads have a Scotty request running and keeps
++// threadQueue tracks which threads have a bot request running and keeps
 +// the newest message that arrived for each while it ran.
 +type threadQueue struct {
 +	mu      sync.Mutex
@@ -375,7 +375,7 @@ index 00000000000..16fccad0858
 +}
 diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
 new file mode 100644
-index 00000000000..de8abc00554
+index 00000000000..1dc8030848b
 --- /dev/null
 +++ b/integrations/access/slack/beams_app_test.go
 @@ -0,0 +1,97 @@
@@ -389,18 +389,18 @@ index 00000000000..de8abc00554
 +	"github.com/stretchr/testify/require"
 +)
 +
-+type fakeScottyBot struct {
++type fakeBeamsBot struct {
 +	mu      sync.Mutex
 +	replies []string
 +}
 +
-+func (b *fakeScottyBot) GenerateWebSocketURL(context.Context) (string, error) { return "", nil }
-+func (b *fakeScottyBot) PostBeamsReply(context.Context, string, string) error { return nil }
-+func (b *fakeScottyBot) LookupEmailByUserID(context.Context, string) (string, error) {
++func (b *fakeBeamsBot) GenerateWebSocketURL(context.Context) (string, error) { return "", nil }
++func (b *fakeBeamsBot) PostBeamsReply(context.Context, string, string) error { return nil }
++func (b *fakeBeamsBot) LookupEmailByUserID(context.Context, string) (string, error) {
 +	return "", nil
 +}
 +
-+func (b *fakeScottyBot) PostBeamsThreadReply(_ context.Context, _, _, text string) error {
++func (b *fakeBeamsBot) PostBeamsThreadReply(_ context.Context, _, _, text string) error {
 +	b.mu.Lock()
 +	defer b.mu.Unlock()
 +	b.replies = append(b.replies, text)
@@ -431,8 +431,8 @@ index 00000000000..de8abc00554
 +	return "answer to " + text, nil
 +}
 +
-+func TestScottyOneRequestPerThread(t *testing.T) {
-+	bot := &fakeScottyBot{}
++func TestBotOneRequestPerThread(t *testing.T) {
++	bot := &fakeBeamsBot{}
 +	runner := &blockingRunner{started: make(chan string, 10), release: make(chan struct{})}
 +	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
 +	ctx := t.Context()
@@ -458,8 +458,8 @@ index 00000000000..de8abc00554
 +	require.Equal(t, []string{"first", "is it ready yet?"}, runner.asks)
 +	require.Equal(t, []string{
 +		"On it. Working in your beam; this can take a few minutes.",
-+		scottyBusyReply,
-+		scottyBusyReply,
++		botBusyReply,
++		botBusyReply,
 +		"answer to first",
 +		"answer to is it ready yet?",
 +	}, bot.replies)
@@ -475,6 +475,1010 @@ index 00000000000..de8abc00554
 +	require.True(t, q.start("C1-1.1", queuedMessage{}))
 +	require.True(t, q.start("C1-2.2", queuedMessage{}))
 +	require.False(t, q.start("C1-1.1", queuedMessage{request: "later"}))
++}
+diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
+new file mode 100644
+index 00000000000..0b8caa3cded
+--- /dev/null
++++ b/integrations/access/slack/beams_bot.go
+@@ -0,0 +1,550 @@
++package slack
++
++import (
++	"cmp"
++	"context"
++	"encoding/json"
++	"fmt"
++	"math/rand/v2"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++	"time"
++
++	"github.com/gravitational/trace"
++)
++
++// botActionPrefix marks lines in Claude's reply that ask the plugin to act
++// on the beam from outside, which Claude cannot do from inside the VM.
++const botActionPrefix = "BEAMS_BOT_ACTION:"
++
++var (
++	sessionIDText = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
++	slackMention  = regexp.MustCompile(`<@[A-Z0-9]+>`)
++	botPrefix     = regexp.MustCompile(`(?i)^\s*@?teleport\s+beams\s+bot\b[\s,:]*`)
++	safeThreadKey = regexp.MustCompile(`^[A-Z0-9]+-[0-9.]+$`)
++
++	// Questions about which beams the user has are answered from tsh beams ls
++	// directly, without a Claude run. Requests that act on beams go to Claude.
++	beamsListQuestion = regexp.MustCompile(`(?i)\b(list|show|what|which|how many|do i have)\b`)
++	beamsPlural       = regexp.MustCompile(`(?i)\bbeams\b`)
++	beamsActionWord   = regexp.MustCompile(`(?i)\b(create|make|build|new|add|publish|unpublish|deploy|run|install|write|delete|remove|rm|start|stop|fix|update|change|set up|setup)\b`)
++)
++
++// botRequest extracts the request from a Slack message addressed to the
++// bot. Mentions, direct messages, and replies in a thread the user already
++// has with the bot (followUp) always count; other channel messages count only
++// when they start with "Teleport Beams Bot".
++func botRequest(event BeamsMessageEvent, followUp bool) (string, bool) {
++	if event.User == "" || event.BotID != "" || event.Subtype != "" {
++		return "", false
++	}
++	text := strings.TrimSpace(slackMention.ReplaceAllString(event.Text, ""))
++	switch {
++	case event.EventType == "app_mention", event.ChannelType == "im", followUp:
++		text = botPrefix.ReplaceAllString(text, "")
++	case botPrefix.MatchString(event.Text):
++		text = botPrefix.ReplaceAllString(event.Text, "")
++	default:
++		return "", false
++	}
++	text = strings.TrimSpace(text)
++	return text, text != ""
++}
++
++// FollowsThread reports whether a Slack user already has a bot
++// conversation in the thread, so their replies there need no mention.
++func (r BeamsCommandRunner) FollowsThread(teamID, userID, threadKey string) bool {
++	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) || !safeThreadKey.MatchString(threadKey) {
++		return false
++	}
++	_, err := os.Stat(filepath.Join(r.Config.ProfilesDir, teamID, userID, "threads", threadKey))
++	return err == nil
++}
++
++// beamMeUp matches the "beam me up" easter egg. The replies are in the voice
++// of Star Trek's Scotty, so "beam me up, Scotty" works too.
++var beamMeUp = regexp.MustCompile(`(?i)^\W*beam\s+me\s+up\b[\s,]*(scotty)?\W*$`)
++
++var beamMeUpReplies = []string{
++	"Ach, I cannae beam ye anywhere, Captain! There's nae transporter wired into this Slack. What I *can* do is help ye securely create and run AI runtimes. Just say the word.",
++	"Beam ye up? With what, Captain? I've nae transporter room here, just Teleport. But I'll gladly help ye securely spin up and run AI runtimes, and that's a miracle I can actually deliver.",
++	"I'm givin' her all she's got, but she's no' a transporter, Captain! She's built tae help ye securely create and run AI runtimes. Tell me what ye need and I'll have it runnin' in no time.",
++}
++
++func isBeamMeUp(text string) bool {
++	return beamMeUp.MatchString(strings.TrimSpace(text))
++}
++
++// beamsIntroQuestion matches questions about what Beams are or what you can
++// do with them, answered with beamsIntro.
++var beamsIntroQuestion = regexp.MustCompile(`(?i)^\W*(what\s+(can|could)\s+(i|we|you)\s+do\s+with\s+(teleport\s+)?beams?|what\s+(are|is)\s+(teleport\s+)?beams|what\s+is\s+a\s+beam|what\s+are\s+beams\s+for)\W*$`)
++
++func isBeamsIntroQuestion(text string) bool {
++	return beamsIntroQuestion.MatchString(strings.TrimSpace(text))
++}
++
++// beamsIntro summarizes https://goteleport.com/docs/beams/ in terms of what
++// this Slack integration can do.
++const beamsIntro = `*Teleport Beams* are short-lived computers in the cloud where AI assistants can do work for you, safely. Each beam belongs to you, everything done in it is recorded under your name, and it cleans itself up after a day.
++
++Here's what you can do, right here in Slack:
++• *Ask me for things in plain English.* For example: "@Teleport Beams Bot make a webpage about things to do in Ballard and share it." I'll do the work in one of your beams and reply with a link.
++• *Keep going in the same thread* to make changes, like "make the title bigger."
++• *Share what you made.* Ask me to publish it and I'll give you a link you can open after signing in to Teleport.
++• *See your beams* by asking "how many beams do I have?"
++• *Start fresh* by asking for a new beam.
++
++Comfortable with commands? ` + "`/beams help`" + ` lists everything, including running Claude Code or Codex yourself.
++Learn more: https://goteleport.com/docs/beams/`
++
++// isInstantRequest reports whether the bot answers a request immediately,
++// without Teleport or a Claude run.
++func isInstantRequest(text string) bool {
++	return isBeamMeUp(text) || isBeamsIntroQuestion(text)
++}
++
++// Ask handles a natural-language request. It picks one of the user's beams
++// (or creates one), hands the request to Claude Code there, and carries out
++// the actions Claude asks for. Requests in the same Slack thread continue the
++// same beam and Claude conversation.
++func (r BeamsCommandRunner) Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error) {
++	if !safeThreadKey.MatchString(threadKey) {
++		return "", trace.BadParameter("invalid Slack thread")
++	}
++	if isBeamMeUp(text) {
++		return beamMeUpReplies[rand.IntN(len(beamMeUpReplies))], nil
++	}
++	if isBeamsIntroQuestion(text) {
++		return beamsIntro, nil
++	}
++	s, err := r.newSession(ctx, teamID, userID)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++
++	threadsDir := filepath.Join(s.profileDir, "threads")
++	if err := os.MkdirAll(threadsDir, 0o700); err != nil {
++		return "", trace.Wrap(err)
++	}
++	pendingPath := filepath.Join(threadsDir, threadKey+".pending")
++
++	// The bot only works as the user, so beams it creates are owned by them and
++	// their published URLs are reachable. Until the user authorizes the bot,
++	// hold the request and explain how.
++	var notes []string
++	if s.delegation == "" {
++		id := sessionIDText.FindString(text)
++		if id == "" {
++			return s.requestAuthorization(threadKey, pendingPath, text)
++		}
++		if _, err := s.connect(ctx, []string{id}); err != nil {
++			return "", trace.Wrap(err, "connecting delegation session")
++		}
++		s.delegation = strings.ToLower(id)
++		pending, _ := os.ReadFile(pendingPath)
++		_ = os.Remove(pendingPath)
++		if strings.TrimSpace(string(pending)) == "" {
++			return fmt.Sprintf("Thanks, you're connected as %s. What would you like me to do?", s.username), nil
++		}
++		notes = append(notes, fmt.Sprintf("Thanks, you're connected as %s.", s.username))
++		text = string(pending)
++	}
++
++	beams, err := s.delegatedBeams(ctx)
++	if needsAuthorization(err) {
++		return s.requestAuthorization(threadKey, pendingPath, text)
++	}
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	threadPath := filepath.Join(threadsDir, threadKey)
++	thread := readThreadState(threadPath)
++	if names, ok := removeTargets(text, beams, thread.beam); ok {
++		return s.removeBeams(ctx, beams, names, thread, threadPath, notes)
++	}
++	if isBeamsListQuestion(text) {
++		threadPath := filepath.Join(threadsDir, threadKey)
++		if _, err := os.Stat(threadPath); os.IsNotExist(err) {
++			if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
++				return "", trace.Wrap(err)
++			}
++		}
++		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now(), "You don't have any beams yet. Ask me to create one.")), "\n\n")), nil
++	}
++
++	agent := thread.agent
++	if requested := requestedAgent(text); requested != "" && requested != agent {
++		agent = requested
++		notes = append(notes, fmt.Sprintf("Using %s for this thread.", agentDisplayName(agent)))
++	}
++	name, continued := chooseBeam(beams, thread.beam, text)
++	// Only continue a conversation the same agent already has in this beam.
++	if name != thread.beam || thread.fresh || agent != thread.agent {
++		continued = false
++	}
++
++	created := false
++	if name == "" {
++		_, name, err = s.createBeam(ctx, nil)
++		if err != nil {
++			return "", trace.Wrap(err, "creating a beam")
++		}
++		created = true
++		notes = append(notes, fmt.Sprintf("Created beam `%s`.", name))
++	}
++	// Mark the beam fresh until an agent run succeeds there, so a failed first
++	// run is not followed by --continue.
++	if err := writeThreadState(threadPath, threadState{beam: name, fresh: !continued, agent: agent}); err != nil {
++		return "", trace.Wrap(err)
++	}
++
++	agentArgs := []string{name}
++	if continued {
++		agentArgs = append(agentArgs, "--continue")
++	}
++	agentArgs = append(agentArgs, botPrompt(name, s.username, created, text))
++	run := s.claude
++	if agent == agentCodex {
++		run = s.codex
++	}
++	output, err := run(ctx, agentArgs)
++	if err != nil {
++		return "", trace.Wrap(err, "running %s in beam %q", agentDisplayName(agent), name)
++	}
++	if err := writeThreadState(threadPath, threadState{beam: name, agent: agent}); err != nil {
++		return "", trace.Wrap(err)
++	}
++
++	reply, actions := parseBotActions(output)
++	var actionNotes []string
++	for _, action := range actions {
++		note, newBeam, err := s.botAction(ctx, name, action)
++		if err != nil {
++			note = fmt.Sprintf("Could not %s: %s", action, trace.UserMessage(err))
++		}
++		actionNotes = append(actionNotes, note)
++		if newBeam != "" {
++			// Follow-ups in this thread should work in the beam the user asked
++			// for, starting a new agent conversation there.
++			name = newBeam
++			if err := writeThreadState(threadPath, threadState{beam: name, fresh: true, agent: agent}); err != nil {
++				return "", trace.Wrap(err)
++			}
++		}
++	}
++
++	parts := append(notes, reply)
++	parts = append(parts, actionNotes...)
++	return truncateSlackOutput(strings.TrimSpace(strings.Join(parts, "\n\n"))), nil
++}
++
++const (
++	agentClaude = "claude"
++	agentCodex  = "codex"
++)
++
++// agentRequest matches a request to use a particular coding agent, such as
++// "use codex to ..." or a request that starts with "codex".
++var agentRequest = regexp.MustCompile(`(?i)(?:^\W*|\b(?:use|using|with|via|through|ask)\s+)(claude(?:\s+code)?|codex)\b`)
++
++// requestedAgent returns the agent a request asks for, or "" for none.
++func requestedAgent(text string) string {
++	m := agentRequest.FindStringSubmatch(text)
++	if m == nil {
++		return ""
++	}
++	if strings.HasPrefix(strings.ToLower(m[1]), agentCodex) {
++		return agentCodex
++	}
++	return agentClaude
++}
++
++func agentDisplayName(agent string) string {
++	if agent == agentCodex {
++		return "Codex"
++	}
++	return "Claude Code"
++}
++
++// threadState is what the bot remembers about a Slack thread: its beam, which
++// agent it uses, and whether that agent has no conversation there yet.
++type threadState struct {
++	beam  string
++	fresh bool
++	agent string
++}
++
++// readThreadState parses "<beam> [new] [claude|codex]". Older files without
++// an agent used Claude.
++func readThreadState(path string) threadState {
++	state := threadState{agent: agentClaude}
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return state
++	}
++	fields := strings.Fields(string(data))
++	if len(fields) > 0 {
++		state.beam = fields[0]
++	}
++	for _, field := range fields[min(1, len(fields)):] {
++		switch field {
++		case "new":
++			state.fresh = true
++		case agentClaude, agentCodex:
++			state.agent = field
++		}
++	}
++	return state
++}
++
++func writeThreadState(path string, state threadState) error {
++	if state.beam == "" {
++		// No beam yet: keep the file so replies still count as follow-ups.
++		return trace.Wrap(os.WriteFile(path, nil, 0o600))
++	}
++	fields := []string{state.beam}
++	if state.fresh {
++		fields = append(fields, "new")
++	}
++	fields = append(fields, cmp.Or(state.agent, agentClaude))
++	return trace.Wrap(os.WriteFile(path, []byte(strings.Join(fields, " ")), 0o600))
++}
++
++// removeVerb starts a request to delete beams.
++var removeVerb = regexp.MustCompile(`(?i)^\W*(?:please\s+)?(?:delete|remove|destroy|rm|tear\s+down|get\s+rid\s+of)\b`)
++
++// removeTargets reports whether a request asks to delete beams and which.
++// The beams must follow the verb directly ("delete curious-shield", "remove
++// beam a and b", "delete this beam"), so requests like "remove the header
++// from the page in curious-shield" still go to the coding agent. "this beam"
++// or "it" means the thread's beam. ok with no names means the user asked to
++// delete beams without saying which.
++func removeTargets(text string, beams []map[string]any, threadBeam string) (names []string, ok bool) {
++	loc := removeVerb.FindStringIndex(text)
++	if loc == nil {
++		return nil, false
++	}
++	known := map[string]bool{}
++	for _, beam := range beams {
++		if id, _ := beam["id"].(string); id != "" {
++			known[id] = true
++		}
++	}
++	thisBeam, beamWord := false, false
++	for _, word := range strings.Fields(text[loc[1]:]) {
++		word = strings.Trim(word, ",.!?;:`'\"*_")
++		switch lower := strings.ToLower(word); {
++		case known[word]:
++			names = append(names, word)
++		case lower == "this" || lower == "that" || lower == "it":
++			thisBeam = true
++		case lower == "beam":
++			beamWord = true
++			thisBeam = true
++		case lower == "beams":
++			beamWord = true
++		case lower == "the" || lower == "my" || lower == "and" || lower == "both" || lower == "please" || lower == "":
++		default:
++			if len(names) == 0 && !beamWord && !thisBeam {
++				return nil, false
++			}
++		}
++	}
++	if len(names) == 0 && thisBeam && threadBeam != "" && known[threadBeam] {
++		names = []string{threadBeam}
++	}
++	return names, len(names) > 0 || beamWord || thisBeam
++}
++
++// removeBeams deletes the named beams as the user and forgets the thread's
++// beam if it was one of them.
++func (s beamsSession) removeBeams(ctx context.Context, beams []map[string]any, names []string, thread threadState, threadPath string, notes []string) (string, error) {
++	if len(names) == 0 {
++		notes = append(notes, "Which beam should I delete? Say \"delete\" and its name.\n\n"+
++			formatBeamsList(beams, time.Now(), "You don't have any beams."))
++		return truncateSlackOutput(strings.Join(notes, "\n\n")), nil
++	}
++	for _, name := range names {
++		if _, err := s.target(ctx, []string{"rm", name}); err != nil {
++			notes = append(notes, fmt.Sprintf("Could not delete `%s`: %s", name, trace.UserMessage(err)))
++			continue
++		}
++		notes = append(notes, fmt.Sprintf("Deleted beam `%s`.", name))
++		if name == thread.beam {
++			thread.beam, thread.fresh = "", false
++		}
++	}
++	if err := writeThreadState(threadPath, thread); err != nil {
++		return "", trace.Wrap(err)
++	}
++	return truncateSlackOutput(strings.Join(notes, "\n\n")), nil
++}
++
++// requestAuthorization saves the request for later and asks the user to let
++// the bot create beams as them. It records the thread so the user's reply
++// with the session ID is picked up without a mention.
++func (s beamsSession) requestAuthorization(threadKey, pendingPath, request string) (string, error) {
++	if s.runner.Config.BotName == "" {
++		return "", trace.BadParameter("delegation is not configured; set beams.bot_name")
++	}
++	if err := os.WriteFile(pendingPath, []byte(request), 0o600); err != nil {
++		return "", trace.Wrap(err)
++	}
++	threadPath := filepath.Join(s.profileDir, "threads", threadKey)
++	if _, err := os.Stat(threadPath); os.IsNotExist(err) {
++		if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
++			return "", trace.Wrap(err)
++		}
++	}
++	return s.authorizationReply("Reply here with the session ID it prints and I'll pick up your request."), nil
++}
++
++// isBeamsListQuestion reports whether a request only asks which beams the
++// user has.
++func isBeamsListQuestion(text string) bool {
++	return beamsPlural.MatchString(text) && beamsListQuestion.MatchString(text) && !beamsActionWord.MatchString(text)
++}
++
++// formatBeamsList describes the user's beams for Slack. empty is the reply
++// when there are none.
++func formatBeamsList(beams []map[string]any, now time.Time, empty string) string {
++	if len(beams) == 0 {
++		return empty
++	}
++	var b strings.Builder
++	if len(beams) == 1 {
++		b.WriteString("You have *1 beam*:")
++	} else {
++		fmt.Fprintf(&b, "You have *%d beams*:", len(beams))
++	}
++	for _, beam := range beams {
++		id, _ := beam["id"].(string)
++		fmt.Fprintf(&b, "\n• `%s`", id)
++		if region, _ := beam["region"].(string); region != "" {
++			fmt.Fprintf(&b, " (%s)", region)
++		}
++		if expires, _ := beam["expires"].(string); expires != "" {
++			if t, err := time.Parse(time.RFC3339Nano, expires); err == nil {
++				fmt.Fprintf(&b, ", expires in %s", humanDuration(t.Sub(now)))
++			}
++		}
++		if url, _ := beam["url"].(string); url != "" {
++			fmt.Fprintf(&b, ", published at %s", url)
++		}
++	}
++	return b.String()
++}
++
++func humanDuration(d time.Duration) string {
++	switch {
++	case d < time.Minute:
++		return "less than a minute"
++	case d < time.Hour:
++		return plural(int(d.Round(time.Minute)/time.Minute), "minute")
++	default:
++		return plural(int(d.Round(time.Hour)/time.Hour), "hour")
++	}
++}
++
++func plural(n int, unit string) string {
++	if n == 1 {
++		return "1 " + unit
++	}
++	return fmt.Sprintf("%d %ss", n, unit)
++}
++
++// chooseBeam picks the beam for a request: the thread's beam, a beam named in
++// the request, or the user's newest beam. continued reports whether the
++// thread already has a Claude conversation in that beam.
++func chooseBeam(beams []map[string]any, threadBeam, text string) (name string, continued bool) {
++	var newest, newestExpiry string
++	for _, beam := range beams {
++		id, _ := beam["id"].(string)
++		if id == "" {
++			continue
++		}
++		if id == threadBeam {
++			return id, true
++		}
++		if strings.Contains(text, id) {
++			name = id
++		}
++		if expires, _ := beam["expires"].(string); newest == "" || expires > newestExpiry {
++			newest, newestExpiry = id, expires
++		}
++	}
++	if name != "" {
++		return name, false
++	}
++	return newest, false
++}
++
++func botPrompt(beam, username string, created bool, request string) string {
++	var b strings.Builder
++	fmt.Fprintf(&b, "You are the Teleport Beams Bot, a Slack assistant working inside the Teleport Beam %q, an ephemeral Debian runtime, on behalf of %s.", beam, username)
++	if created {
++		b.WriteString(" This beam was just created for this request.")
++	}
++	b.WriteString(`
++Carry out the request below in this runtime. Your final reply is posted to Slack, so keep it short and use Slack formatting. Reply to the user directly: do not restate their request or explain these instructions. If you mention this environment, call it a runtime, not a sandbox.
++To share a web page or service, serve it on port 8080 on 0.0.0.0 in the background so it keeps running after you exit (for example with nohup or tmux), then request publishing.
++You cannot manage beams yourself. To have the Slack bot act for you, end your reply with one line per action:
++` + botActionPrefix + ` publish
++` + botActionPrefix + ` unpublish
++` + botActionPrefix + ` create_beam
++Only request create_beam if the user explicitly asks for an additional beam.
++
++Request: `)
++	b.WriteString(request)
++	return b.String()
++}
++
++// parseBotActions separates action lines from Claude's reply.
++func parseBotActions(output string) (string, []string) {
++	var reply []string
++	var actions []string
++	for _, line := range strings.Split(output, "\n") {
++		if action, ok := strings.CutPrefix(strings.TrimSpace(line), botActionPrefix); ok {
++			if action = strings.TrimSpace(action); action != "" {
++				actions = append(actions, action)
++			}
++			continue
++		}
++		reply = append(reply, line)
++	}
++	return strings.TrimSpace(strings.Join(reply, "\n")), actions
++}
++
++// botAction runs one action Claude requested. newBeam is set when the
++// action created a beam.
++func (s beamsSession) botAction(ctx context.Context, beam, action string) (note, newBeam string, err error) {
++	switch action {
++	case "publish":
++		out, err := s.target(ctx, []string{"publish", beam, "--format=json"})
++		if err != nil {
++			return "", "", trace.Wrap(err)
++		}
++		var published struct {
++			URL string `json:"url"`
++		}
++		if json.Unmarshal([]byte(out), &published) == nil && published.URL != "" {
++			return fmt.Sprintf("Published: %s", published.URL), "", nil
++		}
++		return fmt.Sprintf("Published `%s`.", beam), "", nil
++	case "unpublish":
++		if _, err := s.target(ctx, []string{"unpublish", beam}); err != nil {
++			return "", "", trace.Wrap(err)
++		}
++		return fmt.Sprintf("Unpublished `%s`.", beam), "", nil
++	case "create_beam":
++		_, name, err := s.createBeam(ctx, nil)
++		if err != nil {
++			return "", "", trace.Wrap(err)
++		}
++		return fmt.Sprintf("Created beam `%s`. This thread now works in it.", name), name, nil
++	default:
++		return "", "", trace.BadParameter("unsupported action %q", action)
++	}
++}
+diff --git a/integrations/access/slack/beams_bot_test.go b/integrations/access/slack/beams_bot_test.go
+new file mode 100644
+index 00000000000..219ec93b189
+--- /dev/null
++++ b/integrations/access/slack/beams_bot_test.go
+@@ -0,0 +1,442 @@
++package slack
++
++import (
++	"context"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/gravitational/trace"
++	"github.com/stretchr/testify/require"
++)
++
++func TestBotRequest(t *testing.T) {
++	for _, tc := range []struct {
++		name     string
++		event    BeamsMessageEvent
++		followUp bool
++		want     string
++	}{
++		{name: "mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT> create a beam"}, want: "create a beam"},
++		{name: "dm", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Text: "list my beams"}, want: "list my beams"},
++		{name: "channel prefix", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "Teleport Beams Bot, make a page"}, want: "make a page"},
++		{name: "typed mention", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "@teleport beams bot list my beams"}, want: "list my beams"},
++		{name: "old name", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "scotty make a page"}},
++		{name: "channel chatter", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "lunch?"}},
++		{name: "longer word", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "teleport beams bots are neat"}},
++		{name: "bot message", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", BotID: "B1", Text: "hi"}},
++		{name: "edit", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Subtype: "message_changed", Text: "hi"}},
++		{name: "empty mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT>"}},
++		{name: "thread follow-up", followUp: true, event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", ThreadTS: "1.2", Text: "how's that going?"}, want: "how's that going?"},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			got, ok := botRequest(tc.event, tc.followUp)
++			require.Equal(t, tc.want != "", ok)
++			require.Equal(t, tc.want, got)
++		})
++	}
++}
++
++func TestParseBotActions(t *testing.T) {
++	reply, actions := parseBotActions("Done.\n  BEAMS_BOT_ACTION: publish\nSee it soon.\nBEAMS_BOT_ACTION:\n")
++	require.Equal(t, "Done.\nSee it soon.", reply)
++	require.Equal(t, []string{"publish"}, actions)
++}
++
++func TestChooseBeam(t *testing.T) {
++	beams := []map[string]any{
++		{"id": "old", "expires": "2026-10-02T01:00:00Z"},
++		{"id": "new", "expires": "2026-10-02T09:00:00Z"},
++	}
++	name, continued := chooseBeam(beams, "old", "anything")
++	require.Equal(t, "old", name)
++	require.True(t, continued)
++
++	name, continued = chooseBeam(beams, "gone", "do it in old please")
++	require.Equal(t, "old", name)
++	require.False(t, continued)
++
++	name, _ = chooseBeam(beams, "", "make a page")
++	require.Equal(t, "new", name)
++
++	name, _ = chooseBeam(nil, "", "make a page")
++	require.Empty(t, name)
++}
++
++const testSessionID = "11111111-2222-3333-4444-555555555555"
++
++// fakeMint accepts only testSessionID, like a delegation session the user
++// created for the bot.
++func fakeMint(_ context.Context, sessionID, _ string, path string) error {
++	if sessionID != testSessionID {
++		return trace.AccessDenied("delegation session is not valid")
++	}
++	return os.WriteFile(path, []byte("delegated"), 0o600)
++}
++
++func TestBotAsk(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:        tshPath,
++			Proxy:          "example.teleport.sh:443",
++			PluginIdentity: "/plugin-identity",
++			ProfilesDir:    t.TempDir(),
++			BotName:        "teleport-beams-bot",
++			DelegationTTL:  "168h",
++			Users:          map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	thread := "C1-1700000000.000100"
++
++	// Not connected: the bot asks for authorization instead of acting as itself.
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "make a webpage about Seattle and publish it")
++	require.NoError(t, err)
++	require.Contains(t, out, "Before we can get started, you need to allow me to create beams as you.")
++	require.Contains(t, out, "tsh delegation create-session --proxy=example.teleport.sh:443 --bot=teleport-beams-bot --allow-all --session-ttl=168h")
++	require.True(t, runner.FollowsThread("T1", "UALICE", thread), "the reply with the session ID must be picked up without a mention")
++	_, err = os.Stat(logPath)
++	require.True(t, os.IsNotExist(err), "no tsh commands may run before the user connects")
++
++	// A bad ID is rejected and the request stays pending.
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "here you go 99999999-2222-3333-4444-555555555555")
++	require.Error(t, err)
++
++	// Pasting the session ID connects and resumes the original request.
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "here you go "+testSessionID)
++	require.NoError(t, err)
++	require.Contains(t, out, "Thanks, you're connected as alice@example.com.")
++	require.Contains(t, out, "Built the page.")
++	require.Contains(t, out, "Published: https://mine.example")
++	require.NotContains(t, out, "BEAMS_BOT_ACTION")
++	require.NotContains(t, out, "beam:")
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "make the title bigger")
++	require.NoError(t, err)
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.NotContains(t, string(calls), "--identity=/plugin-identity", "the plugin must never act as its own bot identity")
++	require.Contains(t, string(calls), "Request: make a webpage about Seattle and publish it'", "the pending request runs after connecting")
++	require.Contains(t, string(calls), "beams publish mine --format=json")
++	require.Contains(t, string(calls), "'--continue' 'You are the Teleport Beams Bot")
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", "../escape", "hi")
++	require.Error(t, err)
++}
++
++func TestBotExpiredAuthorization(t *testing.T) {
++	tshPath, _ := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:       tshPath,
++			ProfilesDir:   t.TempDir(),
++			BotName:       "teleport-beams-bot",
++			DelegationTTL: "168h",
++			Users:         map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	profile := filepath.Join(runner.Config.ProfilesDir, "T1", "UALICE")
++	require.NoError(t, os.MkdirAll(profile, 0o700))
++	sessionPath := filepath.Join(profile, "delegation-session")
++	require.NoError(t, os.WriteFile(sessionPath, []byte("99999999-2222-3333-4444-555555555555"), 0o600))
++
++	out, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.000300", "make a page")
++	require.NoError(t, err)
++	require.Contains(t, out, "Your authorization has expired.\n*Before we can get started")
++	_, err = os.Stat(sessionPath)
++	require.True(t, os.IsNotExist(err), "the expired session should be forgotten")
++}
++
++func TestBotCreateBeamSwitchesThread(t *testing.T) {
++	dir := t.TempDir()
++	logPath := filepath.Join(dir, "calls")
++	adds := filepath.Join(dir, "adds")
++	tshPath := filepath.Join(dir, "tsh")
++	script := `#!/bin/sh
++echo "$@" >> ` + logPath + `
++case "$3 $4" in
++"beams ls")
++  case $(cat ` + adds + ` 2>/dev/null || echo 0) in
++  0) echo '[]' ;;
++  1) echo '[{"id":"first","expires":"2026-10-02T01:00:00Z"}]' ;;
++  *) echo '[{"id":"first","expires":"2026-10-02T01:00:00Z"},{"id":"second","expires":"2026-10-02T02:00:00Z"}]' ;;
++  esac ;;
++"beams add")
++  n=$(cat ` + adds + ` 2>/dev/null || echo 0); n=$((n+1)); echo $n > ` + adds + `
++  if [ $n -eq 1 ]; then echo '{"id":"first"}'; else echo '{"id":"second"}'; fi ;;
++"beams exec")
++  case "$*" in
++  *"a new beam"*) printf 'Sure.\nBEAMS_BOT_ACTION: create_beam\n' ;;
++  *) echo 'Done.' ;;
++  esac ;;
++esac
++`
++	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:        tshPath,
++			Proxy:          "example.teleport.sh:443",
++			PluginIdentity: "/plugin-identity",
++			ProfilesDir:    t.TempDir(),
++			BotName:        "teleport-beams-bot",
++			Users:          map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	thread := "C1-1700000000.000200"
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "make a page")
++	require.NoError(t, err)
++	require.NotContains(t, out, "beam:")
++	require.Contains(t, out, "Created beam `first`.")
++
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "create a new beam")
++	require.NoError(t, err)
++	require.Contains(t, out, "Created beam `second`. This thread now works in it.")
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "hello")
++	require.NoError(t, err)
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "again")
++	require.NoError(t, err)
++
++	var execs []string
++	data, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	for _, line := range strings.Split(string(data), "\n") {
++		if strings.Contains(line, "beams exec") {
++			execs = append(execs, line)
++		}
++	}
++	require.Len(t, execs, 4)
++	require.Contains(t, execs[0], "beams exec first ")
++	require.NotContains(t, execs[0], "'--continue'")
++	require.Contains(t, execs[1], "beams exec first ")
++	require.Contains(t, execs[1], "'--continue'")
++	require.Contains(t, execs[2], "beams exec second ")
++	require.NotContains(t, execs[2], "'--continue'", "first run in a newly created beam must start fresh")
++	require.Contains(t, execs[3], "beams exec second ")
++	require.Contains(t, execs[3], "'--continue'")
++}
++
++func TestIsBeamsListQuestion(t *testing.T) {
++	for _, text := range []string{"how many beams do i have", "list my beams", "What beams do I have?", "show beams", "which beams are running"} {
++		require.True(t, isBeamsListQuestion(text), text)
++	}
++	for _, text := range []string{"create a new beam", "what's in my beam", "make a webpage and publish it", "delete my beams", "build a site in one of my beams"} {
++		require.False(t, isBeamsListQuestion(text), text)
++	}
++}
++
++func TestFormatBeamsList(t *testing.T) {
++	now := time.Date(2026, 10, 1, 22, 0, 0, 0, time.UTC)
++	out := formatBeamsList([]map[string]any{
++		{"id": "echoing-axis", "region": "us-west-2", "expires": "2026-10-02T21:00:00.123Z"},
++		{"id": "turbo-path", "region": "us-west-2", "expires": "2026-10-01T22:30:00Z", "url": "https://turbo-path.example"},
++	}, now, "none")
++	require.Equal(t, "You have *2 beams*:\n• `echoing-axis` (us-west-2), expires in 23 hours\n• `turbo-path` (us-west-2), expires in 30 minutes, published at https://turbo-path.example", out)
++	require.Equal(t, "none", formatBeamsList(nil, now, "none"))
++}
++
++func TestBotAnswersListFromTSH(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.000400", "how many beams do i have")
++	require.NoError(t, err)
++	require.Contains(t, out, "You have *2 beams*:")
++	require.Contains(t, out, "`mine`")
++	require.True(t, runner.FollowsThread("T1", "UALICE", "C1-1700000000.000400"))
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.NotContains(t, string(calls), "beams exec", "list questions must not start Claude")
++}
++
++func TestBotBeamMeUp(t *testing.T) {
++	for _, text := range []string{"beam me up", "Beam me up, Scotty!", "beam me up scotty", "  BEAM ME UP...  "} {
++		require.True(t, isBeamMeUp(text), text)
++	}
++	for _, text := range []string{"beam me up a webpage about Seattle", "create a new beam", "what's a beam?"} {
++		require.False(t, isBeamMeUp(text), text)
++	}
++
++	// Answered without Teleport or tsh, even for a user who has not connected.
++	runner := BeamsCommandRunner{Config: BeamsConfig{TSHPath: "/nonexistent/tsh", ProfilesDir: t.TempDir()}}
++	out, err := runner.Ask(t.Context(), "T1", "UNOBODY", "C1-1700000000.000500", "beam me up")
++	require.NoError(t, err)
++	require.Contains(t, beamMeUpReplies, out)
++	require.Contains(t, out, "securely")
++
++	bot := &fakeBeamsBot{}
++	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
++	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000600"}, "beam me up, Scotty")
++	require.Len(t, bot.replies, 1, "no \"On it\" message for the easter egg")
++	require.Contains(t, beamMeUpReplies, bot.replies[0])
++}
++
++func TestBotBeamsIntro(t *testing.T) {
++	for _, text := range []string{"what can i do with beams", "What can I do with Teleport Beams?", "what could we do with beams", "what are beams", "what is a beam?", "what are beams for"} {
++		require.True(t, isBeamsIntroQuestion(text), text)
++		require.True(t, isInstantRequest(text), text)
++	}
++	for _, text := range []string{"how many beams do i have", "what beams do i have", "what can i do with beams to build a website"} {
++		require.False(t, isBeamsIntroQuestion(text), text)
++	}
++
++	runner := BeamsCommandRunner{Config: BeamsConfig{TSHPath: "/nonexistent/tsh", ProfilesDir: t.TempDir()}}
++	out, err := runner.Ask(t.Context(), "T1", "UNOBODY", "C1-1700000000.000700", "what can I do with beams?")
++	require.NoError(t, err)
++	require.Equal(t, beamsIntro, out)
++	require.Contains(t, out, "/beams help")
++	require.Contains(t, out, "https://goteleport.com/docs/beams/")
++
++	bot := &fakeBeamsBot{}
++	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
++	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000800"}, "what are beams")
++	require.Equal(t, []string{beamsIntro}, bot.replies, "no \"On it\" message for instant answers")
++}
++
++func TestRequestedAgent(t *testing.T) {
++	for text, want := range map[string]string{
++		"use codex to make a webpage":           agentCodex,
++		"make a webpage with Codex":             agentCodex,
++		"codex: fix the tests":                  agentCodex,
++		"switch back, use claude code":          agentClaude,
++		"Claude, summarize the logs":            agentClaude,
++		"make a webpage comparing claude codex": "",
++		"make a webpage":                        "",
++	} {
++		require.Equal(t, want, requestedAgent(text), text)
++	}
++}
++
++func TestThreadStateCompatibility(t *testing.T) {
++	path := filepath.Join(t.TempDir(), "thread")
++	require.NoError(t, os.WriteFile(path, []byte("mine new"), 0o600))
++	require.Equal(t, threadState{beam: "mine", fresh: true, agent: agentClaude}, readThreadState(path))
++	require.NoError(t, writeThreadState(path, threadState{beam: "mine", agent: agentCodex}))
++	require.Equal(t, threadState{beam: "mine", agent: agentCodex}, readThreadState(path))
++	require.Equal(t, threadState{agent: agentClaude}, readThreadState(filepath.Join(t.TempDir(), "missing")))
++}
++
++func TestBotAgentPerThread(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	thread := "C1-1700000000.000900"
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "use codex to make a page")
++	require.NoError(t, err)
++	require.Contains(t, out, "Using Codex for this thread.")
++	for _, text := range []string{"make the title bigger", "use claude to review it", "thanks, tweak the colors"} {
++		_, err := runner.Ask(ctx, "T1", "UALICE", thread, text)
++		require.NoError(t, err, text)
++	}
++
++	data, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	var execs []string
++	for _, line := range strings.Split(string(data), "\n") {
++		if strings.Contains(line, "beams exec") {
++			execs = append(execs, line)
++		}
++	}
++	require.Len(t, execs, 4)
++	require.Contains(t, execs[0], "'codex' 'exec'")
++	require.NotContains(t, execs[0], "'resume'")
++	require.Contains(t, execs[1], "'codex' 'exec'")
++	require.Contains(t, execs[1], "'resume' '--last'", "follow-ups continue the Codex conversation")
++	require.Contains(t, execs[2], "'claude' '-p'")
++	require.NotContains(t, execs[2], "'--continue'", "switching agents starts a fresh conversation")
++	require.Contains(t, execs[3], "'claude' '-p'")
++	require.Contains(t, execs[3], "'--continue'")
++}
++
++func TestRemoveTargets(t *testing.T) {
++	beams := []map[string]any{{"id": "curious-shield"}, {"id": "mint-arc"}}
++	for _, tc := range []struct {
++		text   string
++		thread string
++		names  []string
++		ok     bool
++	}{
++		{text: "delete curious-shield", names: []string{"curious-shield"}, ok: true},
++		{text: "please remove beam `mint-arc`.", names: []string{"mint-arc"}, ok: true},
++		{text: "delete curious-shield and mint-arc", names: []string{"curious-shield", "mint-arc"}, ok: true},
++		{text: "delete this beam", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
++		{text: "get rid of it", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
++		{text: "delete my beams", ok: true},
++		{text: "delete this beam", ok: true},
++		{text: "remove the background from the page in mint-arc"},
++		{text: "make a page and delete the old one"},
++		{text: "delete nonexistent-beam"},
++	} {
++		names, ok := removeTargets(tc.text, beams, tc.thread)
++		require.Equal(t, tc.ok, ok, tc.text)
++		require.Equal(t, tc.names, names, tc.text)
++	}
++}
++
++func TestBotRemovesBeams(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001000", "delete `mine`")
++	require.NoError(t, err)
++	require.Equal(t, "Deleted beam `mine`.", out)
++
++	out, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001100", "delete my beams")
++	require.NoError(t, err)
++	require.Contains(t, out, "Which beam should I delete?")
++	require.Contains(t, out, "`theirs`")
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001200", "remove the background from the page in mine")
++	require.NoError(t, err)
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Equal(t, 1, strings.Count(string(calls), "beams rm "), "only the explicit delete removes a beam")
++	require.Contains(t, string(calls), "beams rm mine\n")
++	require.Contains(t, string(calls), "beams exec mine", "the page edit goes to the agent")
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
@@ -1182,7 +2186,7 @@ index 00000000000..e754ab81fd7
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..a1e3e1dc359
+index 00000000000..32ba093af90
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
 @@ -0,0 +1,248 @@
@@ -1327,7 +2331,7 @@ index 00000000000..a1e3e1dc359
 +case "$3 $4" in
 +"beams ls") echo '[{"id":"mine","owner":"access-plugin"},{"id":"theirs","owner":"access-plugin"}]' ;;
 +"beams add") echo '{"id":"mine","owner":"access-plugin"}' ;;
-+"beams exec") printf 'Built the page.\nSCOTTY_ACTION: publish\n' ;;
++"beams exec") printf 'Built the page.\nBEAMS_BOT_ACTION: publish\n' ;;
 +"beams publish") echo '{"id":"mine","url":"https://mine.example"}' ;;
 +*) echo ok ;;
 +esac
@@ -1344,7 +2348,7 @@ index 00000000000..a1e3e1dc359
 +			Proxy:          "example.teleport.sh:443",
 +			PluginIdentity: "/plugin-identity",
 +			ProfilesDir:    t.TempDir(),
-+			BotName:        "scotty",
++			BotName:        "teleport-beams-bot",
 +			DelegationTTL:  "168h",
 +			Users:          map[string]string{"UALICE": "alice@example.com"},
 +		},
@@ -1357,7 +2361,7 @@ index 00000000000..a1e3e1dc359
 +		out, err := runner.Run(ctx, "T1", "UALICE", command)
 +		require.NoError(t, err, command)
 +		require.Contains(t, out, "Before we can get started, you need to allow me to create beams as you.", command)
-+		require.Contains(t, out, "--bot=scotty", command)
++		require.Contains(t, out, "--bot=teleport-beams-bot", command)
 +		require.Contains(t, out, "/beams connect <session-id>", command)
 +		require.False(t, strings.HasPrefix(out, "```"), "the prompt has its own code block and must not be wrapped again")
 +	}
@@ -1433,1007 +2437,6 @@ index 00000000000..a1e3e1dc359
 +	attempts, err := os.ReadFile(counter)
 +	require.NoError(t, err)
 +	require.Equal(t, "3\n", string(attempts))
-+}
-diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
-new file mode 100644
-index 00000000000..05ff03172da
---- /dev/null
-+++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,549 @@
-+package slack
-+
-+import (
-+	"cmp"
-+	"context"
-+	"encoding/json"
-+	"fmt"
-+	"math/rand/v2"
-+	"os"
-+	"path/filepath"
-+	"regexp"
-+	"strings"
-+	"time"
-+
-+	"github.com/gravitational/trace"
-+)
-+
-+// scottyActionPrefix marks lines in Claude's reply that ask the plugin to act
-+// on the beam from outside, which Claude cannot do from inside the VM.
-+const scottyActionPrefix = "SCOTTY_ACTION:"
-+
-+var (
-+	sessionIDText = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
-+	slackMention  = regexp.MustCompile(`<@[A-Z0-9]+>`)
-+	scottyPrefix  = regexp.MustCompile(`(?i)^\s*scotty\b[\s,:]*`)
-+	safeThreadKey = regexp.MustCompile(`^[A-Z0-9]+-[0-9.]+$`)
-+
-+	// Questions about which beams the user has are answered from tsh beams ls
-+	// directly, without a Claude run. Requests that act on beams go to Claude.
-+	beamsListQuestion = regexp.MustCompile(`(?i)\b(list|show|what|which|how many|do i have)\b`)
-+	beamsPlural       = regexp.MustCompile(`(?i)\bbeams\b`)
-+	beamsActionWord   = regexp.MustCompile(`(?i)\b(create|make|build|new|add|publish|unpublish|deploy|run|install|write|delete|remove|rm|start|stop|fix|update|change|set up|setup)\b`)
-+)
-+
-+// scottyRequest extracts the request from a Slack message addressed to the
-+// bot. Mentions, direct messages, and replies in a thread the user already
-+// has with Scotty (followUp) always count; other channel messages count only
-+// when they start with "scotty".
-+func scottyRequest(event BeamsMessageEvent, followUp bool) (string, bool) {
-+	if event.User == "" || event.BotID != "" || event.Subtype != "" {
-+		return "", false
-+	}
-+	text := strings.TrimSpace(slackMention.ReplaceAllString(event.Text, ""))
-+	switch {
-+	case event.EventType == "app_mention", event.ChannelType == "im", followUp:
-+		text = scottyPrefix.ReplaceAllString(text, "")
-+	case scottyPrefix.MatchString(event.Text):
-+		text = scottyPrefix.ReplaceAllString(event.Text, "")
-+	default:
-+		return "", false
-+	}
-+	text = strings.TrimSpace(text)
-+	return text, text != ""
-+}
-+
-+// FollowsThread reports whether a Slack user already has a Scotty
-+// conversation in the thread, so their replies there need no mention.
-+func (r BeamsCommandRunner) FollowsThread(teamID, userID, threadKey string) bool {
-+	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) || !safeThreadKey.MatchString(threadKey) {
-+		return false
-+	}
-+	_, err := os.Stat(filepath.Join(r.Config.ProfilesDir, teamID, userID, "threads", threadKey))
-+	return err == nil
-+}
-+
-+// beamMeUp matches the "beam me up" easter egg, with or without "Scotty".
-+var beamMeUp = regexp.MustCompile(`(?i)^\W*beam\s+me\s+up\b[\s,]*(scotty)?\W*$`)
-+
-+var beamMeUpReplies = []string{
-+	"Ach, I cannae beam ye anywhere, Captain! There's nae transporter wired into this Slack. What I *can* do is help ye securely create and run AI runtimes. Just say the word.",
-+	"Beam ye up? With what, Captain? I've nae transporter room here, just Teleport. But I'll gladly help ye securely spin up and run AI runtimes, and that's a miracle I can actually deliver.",
-+	"I'm givin' her all she's got, but she's no' a transporter, Captain! She's built tae help ye securely create and run AI runtimes. Tell me what ye need and I'll have it runnin' in no time.",
-+}
-+
-+func isBeamMeUp(text string) bool {
-+	return beamMeUp.MatchString(strings.TrimSpace(text))
-+}
-+
-+// beamsIntroQuestion matches questions about what Beams are or what you can
-+// do with them, answered with beamsIntro.
-+var beamsIntroQuestion = regexp.MustCompile(`(?i)^\W*(what\s+(can|could)\s+(i|we|you)\s+do\s+with\s+(teleport\s+)?beams?|what\s+(are|is)\s+(teleport\s+)?beams|what\s+is\s+a\s+beam|what\s+are\s+beams\s+for)\W*$`)
-+
-+func isBeamsIntroQuestion(text string) bool {
-+	return beamsIntroQuestion.MatchString(strings.TrimSpace(text))
-+}
-+
-+// beamsIntro summarizes https://goteleport.com/docs/beams/ in terms of what
-+// this Slack integration can do.
-+const beamsIntro = `*Teleport Beams* are short-lived computers in the cloud where AI assistants can do work for you, safely. Each beam belongs to you, everything done in it is recorded under your name, and it cleans itself up after a day.
-+
-+Here's what you can do, right here in Slack:
-+• *Ask me for things in plain English.* For example: "@Scotty make a webpage about things to do in Ballard and share it." I'll do the work in one of your beams and reply with a link.
-+• *Keep going in the same thread* to make changes, like "make the title bigger."
-+• *Share what you made.* Ask me to publish it and I'll give you a link you can open after signing in to Teleport.
-+• *See your beams* by asking "how many beams do I have?"
-+• *Start fresh* by asking for a new beam.
-+
-+Comfortable with commands? ` + "`/beams help`" + ` lists everything, including running Claude Code or Codex yourself.
-+Learn more: https://goteleport.com/docs/beams/`
-+
-+// isInstantRequest reports whether Scotty answers a request immediately,
-+// without Teleport or a Claude run.
-+func isInstantRequest(text string) bool {
-+	return isBeamMeUp(text) || isBeamsIntroQuestion(text)
-+}
-+
-+// Ask handles a natural-language request. It picks one of the user's beams
-+// (or creates one), hands the request to Claude Code there, and carries out
-+// the actions Claude asks for. Requests in the same Slack thread continue the
-+// same beam and Claude conversation.
-+func (r BeamsCommandRunner) Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error) {
-+	if !safeThreadKey.MatchString(threadKey) {
-+		return "", trace.BadParameter("invalid Slack thread")
-+	}
-+	if isBeamMeUp(text) {
-+		return beamMeUpReplies[rand.IntN(len(beamMeUpReplies))], nil
-+	}
-+	if isBeamsIntroQuestion(text) {
-+		return beamsIntro, nil
-+	}
-+	s, err := r.newSession(ctx, teamID, userID)
-+	if err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+
-+	threadsDir := filepath.Join(s.profileDir, "threads")
-+	if err := os.MkdirAll(threadsDir, 0o700); err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+	pendingPath := filepath.Join(threadsDir, threadKey+".pending")
-+
-+	// Scotty only works as the user, so beams it creates are owned by them and
-+	// their published URLs are reachable. Until the user authorizes the bot,
-+	// hold the request and explain how.
-+	var notes []string
-+	if s.delegation == "" {
-+		id := sessionIDText.FindString(text)
-+		if id == "" {
-+			return s.requestAuthorization(threadKey, pendingPath, text)
-+		}
-+		if _, err := s.connect(ctx, []string{id}); err != nil {
-+			return "", trace.Wrap(err, "connecting delegation session")
-+		}
-+		s.delegation = strings.ToLower(id)
-+		pending, _ := os.ReadFile(pendingPath)
-+		_ = os.Remove(pendingPath)
-+		if strings.TrimSpace(string(pending)) == "" {
-+			return fmt.Sprintf("Thanks, you're connected as %s. What would you like me to do?", s.username), nil
-+		}
-+		notes = append(notes, fmt.Sprintf("Thanks, you're connected as %s.", s.username))
-+		text = string(pending)
-+	}
-+
-+	beams, err := s.delegatedBeams(ctx)
-+	if needsAuthorization(err) {
-+		return s.requestAuthorization(threadKey, pendingPath, text)
-+	}
-+	if err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+	threadPath := filepath.Join(threadsDir, threadKey)
-+	thread := readThreadState(threadPath)
-+	if names, ok := removeTargets(text, beams, thread.beam); ok {
-+		return s.removeBeams(ctx, beams, names, thread, threadPath, notes)
-+	}
-+	if isBeamsListQuestion(text) {
-+		threadPath := filepath.Join(threadsDir, threadKey)
-+		if _, err := os.Stat(threadPath); os.IsNotExist(err) {
-+			if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
-+				return "", trace.Wrap(err)
-+			}
-+		}
-+		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now(), "You don't have any beams yet. Ask me to create one.")), "\n\n")), nil
-+	}
-+
-+	agent := thread.agent
-+	if requested := requestedAgent(text); requested != "" && requested != agent {
-+		agent = requested
-+		notes = append(notes, fmt.Sprintf("Using %s for this thread.", agentDisplayName(agent)))
-+	}
-+	name, continued := chooseBeam(beams, thread.beam, text)
-+	// Only continue a conversation the same agent already has in this beam.
-+	if name != thread.beam || thread.fresh || agent != thread.agent {
-+		continued = false
-+	}
-+
-+	created := false
-+	if name == "" {
-+		_, name, err = s.createBeam(ctx, nil)
-+		if err != nil {
-+			return "", trace.Wrap(err, "creating a beam")
-+		}
-+		created = true
-+		notes = append(notes, fmt.Sprintf("Created beam `%s`.", name))
-+	}
-+	// Mark the beam fresh until an agent run succeeds there, so a failed first
-+	// run is not followed by --continue.
-+	if err := writeThreadState(threadPath, threadState{beam: name, fresh: !continued, agent: agent}); err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+
-+	agentArgs := []string{name}
-+	if continued {
-+		agentArgs = append(agentArgs, "--continue")
-+	}
-+	agentArgs = append(agentArgs, scottyPrompt(name, s.username, created, text))
-+	run := s.claude
-+	if agent == agentCodex {
-+		run = s.codex
-+	}
-+	output, err := run(ctx, agentArgs)
-+	if err != nil {
-+		return "", trace.Wrap(err, "running %s in beam %q", agentDisplayName(agent), name)
-+	}
-+	if err := writeThreadState(threadPath, threadState{beam: name, agent: agent}); err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+
-+	reply, actions := parseScottyActions(output)
-+	var actionNotes []string
-+	for _, action := range actions {
-+		note, newBeam, err := s.scottyAction(ctx, name, action)
-+		if err != nil {
-+			note = fmt.Sprintf("Could not %s: %s", action, trace.UserMessage(err))
-+		}
-+		actionNotes = append(actionNotes, note)
-+		if newBeam != "" {
-+			// Follow-ups in this thread should work in the beam the user asked
-+			// for, starting a new agent conversation there.
-+			name = newBeam
-+			if err := writeThreadState(threadPath, threadState{beam: name, fresh: true, agent: agent}); err != nil {
-+				return "", trace.Wrap(err)
-+			}
-+		}
-+	}
-+
-+	parts := append(notes, reply)
-+	parts = append(parts, actionNotes...)
-+	return truncateSlackOutput(strings.TrimSpace(strings.Join(parts, "\n\n"))), nil
-+}
-+
-+const (
-+	agentClaude = "claude"
-+	agentCodex  = "codex"
-+)
-+
-+// agentRequest matches a request to use a particular coding agent, such as
-+// "use codex to ..." or a request that starts with "codex".
-+var agentRequest = regexp.MustCompile(`(?i)(?:^\W*|\b(?:use|using|with|via|through|ask)\s+)(claude(?:\s+code)?|codex)\b`)
-+
-+// requestedAgent returns the agent a request asks for, or "" for none.
-+func requestedAgent(text string) string {
-+	m := agentRequest.FindStringSubmatch(text)
-+	if m == nil {
-+		return ""
-+	}
-+	if strings.HasPrefix(strings.ToLower(m[1]), agentCodex) {
-+		return agentCodex
-+	}
-+	return agentClaude
-+}
-+
-+func agentDisplayName(agent string) string {
-+	if agent == agentCodex {
-+		return "Codex"
-+	}
-+	return "Claude Code"
-+}
-+
-+// threadState is what Scotty remembers about a Slack thread: its beam, which
-+// agent it uses, and whether that agent has no conversation there yet.
-+type threadState struct {
-+	beam  string
-+	fresh bool
-+	agent string
-+}
-+
-+// readThreadState parses "<beam> [new] [claude|codex]". Older files without
-+// an agent used Claude.
-+func readThreadState(path string) threadState {
-+	state := threadState{agent: agentClaude}
-+	data, err := os.ReadFile(path)
-+	if err != nil {
-+		return state
-+	}
-+	fields := strings.Fields(string(data))
-+	if len(fields) > 0 {
-+		state.beam = fields[0]
-+	}
-+	for _, field := range fields[min(1, len(fields)):] {
-+		switch field {
-+		case "new":
-+			state.fresh = true
-+		case agentClaude, agentCodex:
-+			state.agent = field
-+		}
-+	}
-+	return state
-+}
-+
-+func writeThreadState(path string, state threadState) error {
-+	if state.beam == "" {
-+		// No beam yet: keep the file so replies still count as follow-ups.
-+		return trace.Wrap(os.WriteFile(path, nil, 0o600))
-+	}
-+	fields := []string{state.beam}
-+	if state.fresh {
-+		fields = append(fields, "new")
-+	}
-+	fields = append(fields, cmp.Or(state.agent, agentClaude))
-+	return trace.Wrap(os.WriteFile(path, []byte(strings.Join(fields, " ")), 0o600))
-+}
-+
-+// removeVerb starts a request to delete beams.
-+var removeVerb = regexp.MustCompile(`(?i)^\W*(?:please\s+)?(?:delete|remove|destroy|rm|tear\s+down|get\s+rid\s+of)\b`)
-+
-+// removeTargets reports whether a request asks to delete beams and which.
-+// The beams must follow the verb directly ("delete curious-shield", "remove
-+// beam a and b", "delete this beam"), so requests like "remove the header
-+// from the page in curious-shield" still go to the coding agent. "this beam"
-+// or "it" means the thread's beam. ok with no names means the user asked to
-+// delete beams without saying which.
-+func removeTargets(text string, beams []map[string]any, threadBeam string) (names []string, ok bool) {
-+	loc := removeVerb.FindStringIndex(text)
-+	if loc == nil {
-+		return nil, false
-+	}
-+	known := map[string]bool{}
-+	for _, beam := range beams {
-+		if id, _ := beam["id"].(string); id != "" {
-+			known[id] = true
-+		}
-+	}
-+	thisBeam, beamWord := false, false
-+	for _, word := range strings.Fields(text[loc[1]:]) {
-+		word = strings.Trim(word, ",.!?;:`'\"*_")
-+		switch lower := strings.ToLower(word); {
-+		case known[word]:
-+			names = append(names, word)
-+		case lower == "this" || lower == "that" || lower == "it":
-+			thisBeam = true
-+		case lower == "beam":
-+			beamWord = true
-+			thisBeam = true
-+		case lower == "beams":
-+			beamWord = true
-+		case lower == "the" || lower == "my" || lower == "and" || lower == "both" || lower == "please" || lower == "":
-+		default:
-+			if len(names) == 0 && !beamWord && !thisBeam {
-+				return nil, false
-+			}
-+		}
-+	}
-+	if len(names) == 0 && thisBeam && threadBeam != "" && known[threadBeam] {
-+		names = []string{threadBeam}
-+	}
-+	return names, len(names) > 0 || beamWord || thisBeam
-+}
-+
-+// removeBeams deletes the named beams as the user and forgets the thread's
-+// beam if it was one of them.
-+func (s beamsSession) removeBeams(ctx context.Context, beams []map[string]any, names []string, thread threadState, threadPath string, notes []string) (string, error) {
-+	if len(names) == 0 {
-+		notes = append(notes, "Which beam should I delete? Say \"delete\" and its name.\n\n"+
-+			formatBeamsList(beams, time.Now(), "You don't have any beams."))
-+		return truncateSlackOutput(strings.Join(notes, "\n\n")), nil
-+	}
-+	for _, name := range names {
-+		if _, err := s.target(ctx, []string{"rm", name}); err != nil {
-+			notes = append(notes, fmt.Sprintf("Could not delete `%s`: %s", name, trace.UserMessage(err)))
-+			continue
-+		}
-+		notes = append(notes, fmt.Sprintf("Deleted beam `%s`.", name))
-+		if name == thread.beam {
-+			thread.beam, thread.fresh = "", false
-+		}
-+	}
-+	if err := writeThreadState(threadPath, thread); err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+	return truncateSlackOutput(strings.Join(notes, "\n\n")), nil
-+}
-+
-+// requestAuthorization saves the request for later and asks the user to let
-+// the bot create beams as them. It records the thread so the user's reply
-+// with the session ID is picked up without a mention.
-+func (s beamsSession) requestAuthorization(threadKey, pendingPath, request string) (string, error) {
-+	if s.runner.Config.BotName == "" {
-+		return "", trace.BadParameter("delegation is not configured; set beams.bot_name")
-+	}
-+	if err := os.WriteFile(pendingPath, []byte(request), 0o600); err != nil {
-+		return "", trace.Wrap(err)
-+	}
-+	threadPath := filepath.Join(s.profileDir, "threads", threadKey)
-+	if _, err := os.Stat(threadPath); os.IsNotExist(err) {
-+		if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
-+			return "", trace.Wrap(err)
-+		}
-+	}
-+	return s.authorizationReply("Reply here with the session ID it prints and I'll pick up your request."), nil
-+}
-+
-+// isBeamsListQuestion reports whether a request only asks which beams the
-+// user has.
-+func isBeamsListQuestion(text string) bool {
-+	return beamsPlural.MatchString(text) && beamsListQuestion.MatchString(text) && !beamsActionWord.MatchString(text)
-+}
-+
-+// formatBeamsList describes the user's beams for Slack. empty is the reply
-+// when there are none.
-+func formatBeamsList(beams []map[string]any, now time.Time, empty string) string {
-+	if len(beams) == 0 {
-+		return empty
-+	}
-+	var b strings.Builder
-+	if len(beams) == 1 {
-+		b.WriteString("You have *1 beam*:")
-+	} else {
-+		fmt.Fprintf(&b, "You have *%d beams*:", len(beams))
-+	}
-+	for _, beam := range beams {
-+		id, _ := beam["id"].(string)
-+		fmt.Fprintf(&b, "\n• `%s`", id)
-+		if region, _ := beam["region"].(string); region != "" {
-+			fmt.Fprintf(&b, " (%s)", region)
-+		}
-+		if expires, _ := beam["expires"].(string); expires != "" {
-+			if t, err := time.Parse(time.RFC3339Nano, expires); err == nil {
-+				fmt.Fprintf(&b, ", expires in %s", humanDuration(t.Sub(now)))
-+			}
-+		}
-+		if url, _ := beam["url"].(string); url != "" {
-+			fmt.Fprintf(&b, ", published at %s", url)
-+		}
-+	}
-+	return b.String()
-+}
-+
-+func humanDuration(d time.Duration) string {
-+	switch {
-+	case d < time.Minute:
-+		return "less than a minute"
-+	case d < time.Hour:
-+		return plural(int(d.Round(time.Minute)/time.Minute), "minute")
-+	default:
-+		return plural(int(d.Round(time.Hour)/time.Hour), "hour")
-+	}
-+}
-+
-+func plural(n int, unit string) string {
-+	if n == 1 {
-+		return "1 " + unit
-+	}
-+	return fmt.Sprintf("%d %ss", n, unit)
-+}
-+
-+// chooseBeam picks the beam for a request: the thread's beam, a beam named in
-+// the request, or the user's newest beam. continued reports whether the
-+// thread already has a Claude conversation in that beam.
-+func chooseBeam(beams []map[string]any, threadBeam, text string) (name string, continued bool) {
-+	var newest, newestExpiry string
-+	for _, beam := range beams {
-+		id, _ := beam["id"].(string)
-+		if id == "" {
-+			continue
-+		}
-+		if id == threadBeam {
-+			return id, true
-+		}
-+		if strings.Contains(text, id) {
-+			name = id
-+		}
-+		if expires, _ := beam["expires"].(string); newest == "" || expires > newestExpiry {
-+			newest, newestExpiry = id, expires
-+		}
-+	}
-+	if name != "" {
-+		return name, false
-+	}
-+	return newest, false
-+}
-+
-+func scottyPrompt(beam, username string, created bool, request string) string {
-+	var b strings.Builder
-+	fmt.Fprintf(&b, "You are Scotty, a Slack assistant working inside the Teleport Beam %q, an ephemeral Debian runtime, on behalf of %s.", beam, username)
-+	if created {
-+		b.WriteString(" This beam was just created for this request.")
-+	}
-+	b.WriteString(`
-+Carry out the request below in this runtime. Your final reply is posted to Slack, so keep it short and use Slack formatting. Reply to the user directly: do not restate their request or explain these instructions. If you mention this environment, call it a runtime, not a sandbox.
-+To share a web page or service, serve it on port 8080 on 0.0.0.0 in the background so it keeps running after you exit (for example with nohup or tmux), then request publishing.
-+You cannot manage beams yourself. To have the Slack bot act for you, end your reply with one line per action:
-+` + scottyActionPrefix + ` publish
-+` + scottyActionPrefix + ` unpublish
-+` + scottyActionPrefix + ` create_beam
-+Only request create_beam if the user explicitly asks for an additional beam.
-+
-+Request: `)
-+	b.WriteString(request)
-+	return b.String()
-+}
-+
-+// parseScottyActions separates action lines from Claude's reply.
-+func parseScottyActions(output string) (string, []string) {
-+	var reply []string
-+	var actions []string
-+	for _, line := range strings.Split(output, "\n") {
-+		if action, ok := strings.CutPrefix(strings.TrimSpace(line), scottyActionPrefix); ok {
-+			if action = strings.TrimSpace(action); action != "" {
-+				actions = append(actions, action)
-+			}
-+			continue
-+		}
-+		reply = append(reply, line)
-+	}
-+	return strings.TrimSpace(strings.Join(reply, "\n")), actions
-+}
-+
-+// scottyAction runs one action Claude requested. newBeam is set when the
-+// action created a beam.
-+func (s beamsSession) scottyAction(ctx context.Context, beam, action string) (note, newBeam string, err error) {
-+	switch action {
-+	case "publish":
-+		out, err := s.target(ctx, []string{"publish", beam, "--format=json"})
-+		if err != nil {
-+			return "", "", trace.Wrap(err)
-+		}
-+		var published struct {
-+			URL string `json:"url"`
-+		}
-+		if json.Unmarshal([]byte(out), &published) == nil && published.URL != "" {
-+			return fmt.Sprintf("Published: %s", published.URL), "", nil
-+		}
-+		return fmt.Sprintf("Published `%s`.", beam), "", nil
-+	case "unpublish":
-+		if _, err := s.target(ctx, []string{"unpublish", beam}); err != nil {
-+			return "", "", trace.Wrap(err)
-+		}
-+		return fmt.Sprintf("Unpublished `%s`.", beam), "", nil
-+	case "create_beam":
-+		_, name, err := s.createBeam(ctx, nil)
-+		if err != nil {
-+			return "", "", trace.Wrap(err)
-+		}
-+		return fmt.Sprintf("Created beam `%s`. This thread now works in it.", name), name, nil
-+	default:
-+		return "", "", trace.BadParameter("unsupported action %q", action)
-+	}
-+}
-diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
-new file mode 100644
-index 00000000000..8d1b5b339e8
---- /dev/null
-+++ b/integrations/access/slack/beams_scotty_test.go
-@@ -0,0 +1,440 @@
-+package slack
-+
-+import (
-+	"context"
-+	"os"
-+	"path/filepath"
-+	"strings"
-+	"testing"
-+	"time"
-+
-+	"github.com/gravitational/trace"
-+	"github.com/stretchr/testify/require"
-+)
-+
-+func TestScottyRequest(t *testing.T) {
-+	for _, tc := range []struct {
-+		name     string
-+		event    BeamsMessageEvent
-+		followUp bool
-+		want     string
-+	}{
-+		{name: "mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT> create a beam"}, want: "create a beam"},
-+		{name: "dm", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Text: "list my beams"}, want: "list my beams"},
-+		{name: "channel prefix", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "Scotty, make a page"}, want: "make a page"},
-+		{name: "channel chatter", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "lunch?"}},
-+		{name: "scottyish word", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "scottys idea"}},
-+		{name: "bot message", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", BotID: "B1", Text: "hi"}},
-+		{name: "edit", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Subtype: "message_changed", Text: "hi"}},
-+		{name: "empty mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT>"}},
-+		{name: "thread follow-up", followUp: true, event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", ThreadTS: "1.2", Text: "how's that going?"}, want: "how's that going?"},
-+	} {
-+		t.Run(tc.name, func(t *testing.T) {
-+			got, ok := scottyRequest(tc.event, tc.followUp)
-+			require.Equal(t, tc.want != "", ok)
-+			require.Equal(t, tc.want, got)
-+		})
-+	}
-+}
-+
-+func TestParseScottyActions(t *testing.T) {
-+	reply, actions := parseScottyActions("Done.\n  SCOTTY_ACTION: publish\nSee it soon.\nSCOTTY_ACTION:\n")
-+	require.Equal(t, "Done.\nSee it soon.", reply)
-+	require.Equal(t, []string{"publish"}, actions)
-+}
-+
-+func TestChooseBeam(t *testing.T) {
-+	beams := []map[string]any{
-+		{"id": "old", "expires": "2026-10-02T01:00:00Z"},
-+		{"id": "new", "expires": "2026-10-02T09:00:00Z"},
-+	}
-+	name, continued := chooseBeam(beams, "old", "anything")
-+	require.Equal(t, "old", name)
-+	require.True(t, continued)
-+
-+	name, continued = chooseBeam(beams, "gone", "do it in old please")
-+	require.Equal(t, "old", name)
-+	require.False(t, continued)
-+
-+	name, _ = chooseBeam(beams, "", "make a page")
-+	require.Equal(t, "new", name)
-+
-+	name, _ = chooseBeam(nil, "", "make a page")
-+	require.Empty(t, name)
-+}
-+
-+const testSessionID = "11111111-2222-3333-4444-555555555555"
-+
-+// fakeMint accepts only testSessionID, like a delegation session the user
-+// created for the bot.
-+func fakeMint(_ context.Context, sessionID, _ string, path string) error {
-+	if sessionID != testSessionID {
-+		return trace.AccessDenied("delegation session is not valid")
-+	}
-+	return os.WriteFile(path, []byte("delegated"), 0o600)
-+}
-+
-+func TestScottyAsk(t *testing.T) {
-+	tshPath, logPath := writeFakeTSH(t)
-+	runner := BeamsCommandRunner{
-+		Config: BeamsConfig{
-+			TSHPath:        tshPath,
-+			Proxy:          "example.teleport.sh:443",
-+			PluginIdentity: "/plugin-identity",
-+			ProfilesDir:    t.TempDir(),
-+			BotName:        "scotty",
-+			DelegationTTL:  "168h",
-+			Users:          map[string]string{"UALICE": "alice@example.com"},
-+		},
-+		MintIdentity: fakeMint,
-+	}
-+	ctx := t.Context()
-+	thread := "C1-1700000000.000100"
-+
-+	// Not connected: Scotty asks for authorization instead of acting as the bot.
-+	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "make a webpage about Seattle and publish it")
-+	require.NoError(t, err)
-+	require.Contains(t, out, "Before we can get started, you need to allow me to create beams as you.")
-+	require.Contains(t, out, "tsh delegation create-session --proxy=example.teleport.sh:443 --bot=scotty --allow-all --session-ttl=168h")
-+	require.True(t, runner.FollowsThread("T1", "UALICE", thread), "the reply with the session ID must be picked up without a mention")
-+	_, err = os.Stat(logPath)
-+	require.True(t, os.IsNotExist(err), "no tsh commands may run before the user connects")
-+
-+	// A bad ID is rejected and the request stays pending.
-+	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "here you go 99999999-2222-3333-4444-555555555555")
-+	require.Error(t, err)
-+
-+	// Pasting the session ID connects and resumes the original request.
-+	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "here you go "+testSessionID)
-+	require.NoError(t, err)
-+	require.Contains(t, out, "Thanks, you're connected as alice@example.com.")
-+	require.Contains(t, out, "Built the page.")
-+	require.Contains(t, out, "Published: https://mine.example")
-+	require.NotContains(t, out, "SCOTTY_ACTION")
-+	require.NotContains(t, out, "beam:")
-+
-+	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "make the title bigger")
-+	require.NoError(t, err)
-+
-+	calls, err := os.ReadFile(logPath)
-+	require.NoError(t, err)
-+	require.NotContains(t, string(calls), "--identity=/plugin-identity", "Scotty must never act as the bot")
-+	require.Contains(t, string(calls), "Request: make a webpage about Seattle and publish it'", "the pending request runs after connecting")
-+	require.Contains(t, string(calls), "beams publish mine --format=json")
-+	require.Contains(t, string(calls), "'--continue' 'You are Scotty")
-+
-+	_, err = runner.Ask(ctx, "T1", "UALICE", "../escape", "hi")
-+	require.Error(t, err)
-+}
-+
-+func TestScottyExpiredAuthorization(t *testing.T) {
-+	tshPath, _ := writeFakeTSH(t)
-+	runner := BeamsCommandRunner{
-+		Config: BeamsConfig{
-+			TSHPath:       tshPath,
-+			ProfilesDir:   t.TempDir(),
-+			BotName:       "scotty",
-+			DelegationTTL: "168h",
-+			Users:         map[string]string{"UALICE": "alice@example.com"},
-+		},
-+		MintIdentity: fakeMint,
-+	}
-+	profile := filepath.Join(runner.Config.ProfilesDir, "T1", "UALICE")
-+	require.NoError(t, os.MkdirAll(profile, 0o700))
-+	sessionPath := filepath.Join(profile, "delegation-session")
-+	require.NoError(t, os.WriteFile(sessionPath, []byte("99999999-2222-3333-4444-555555555555"), 0o600))
-+
-+	out, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.000300", "make a page")
-+	require.NoError(t, err)
-+	require.Contains(t, out, "Your authorization has expired.\n*Before we can get started")
-+	_, err = os.Stat(sessionPath)
-+	require.True(t, os.IsNotExist(err), "the expired session should be forgotten")
-+}
-+
-+func TestScottyCreateBeamSwitchesThread(t *testing.T) {
-+	dir := t.TempDir()
-+	logPath := filepath.Join(dir, "calls")
-+	adds := filepath.Join(dir, "adds")
-+	tshPath := filepath.Join(dir, "tsh")
-+	script := `#!/bin/sh
-+echo "$@" >> ` + logPath + `
-+case "$3 $4" in
-+"beams ls")
-+  case $(cat ` + adds + ` 2>/dev/null || echo 0) in
-+  0) echo '[]' ;;
-+  1) echo '[{"id":"first","expires":"2026-10-02T01:00:00Z"}]' ;;
-+  *) echo '[{"id":"first","expires":"2026-10-02T01:00:00Z"},{"id":"second","expires":"2026-10-02T02:00:00Z"}]' ;;
-+  esac ;;
-+"beams add")
-+  n=$(cat ` + adds + ` 2>/dev/null || echo 0); n=$((n+1)); echo $n > ` + adds + `
-+  if [ $n -eq 1 ]; then echo '{"id":"first"}'; else echo '{"id":"second"}'; fi ;;
-+"beams exec")
-+  case "$*" in
-+  *"a new beam"*) printf 'Sure.\nSCOTTY_ACTION: create_beam\n' ;;
-+  *) echo 'Done.' ;;
-+  esac ;;
-+esac
-+`
-+	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
-+	runner := BeamsCommandRunner{
-+		Config: BeamsConfig{
-+			TSHPath:        tshPath,
-+			Proxy:          "example.teleport.sh:443",
-+			PluginIdentity: "/plugin-identity",
-+			ProfilesDir:    t.TempDir(),
-+			BotName:        "scotty",
-+			Users:          map[string]string{"UALICE": "alice@example.com"},
-+		},
-+		MintIdentity: fakeMint,
-+	}
-+	ctx := t.Context()
-+	thread := "C1-1700000000.000200"
-+	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
-+	require.NoError(t, err)
-+
-+	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "make a page")
-+	require.NoError(t, err)
-+	require.NotContains(t, out, "beam:")
-+	require.Contains(t, out, "Created beam `first`.")
-+
-+	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "create a new beam")
-+	require.NoError(t, err)
-+	require.Contains(t, out, "Created beam `second`. This thread now works in it.")
-+
-+	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "hello")
-+	require.NoError(t, err)
-+	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "again")
-+	require.NoError(t, err)
-+
-+	var execs []string
-+	data, err := os.ReadFile(logPath)
-+	require.NoError(t, err)
-+	for _, line := range strings.Split(string(data), "\n") {
-+		if strings.Contains(line, "beams exec") {
-+			execs = append(execs, line)
-+		}
-+	}
-+	require.Len(t, execs, 4)
-+	require.Contains(t, execs[0], "beams exec first ")
-+	require.NotContains(t, execs[0], "'--continue'")
-+	require.Contains(t, execs[1], "beams exec first ")
-+	require.Contains(t, execs[1], "'--continue'")
-+	require.Contains(t, execs[2], "beams exec second ")
-+	require.NotContains(t, execs[2], "'--continue'", "first run in a newly created beam must start fresh")
-+	require.Contains(t, execs[3], "beams exec second ")
-+	require.Contains(t, execs[3], "'--continue'")
-+}
-+
-+func TestIsBeamsListQuestion(t *testing.T) {
-+	for _, text := range []string{"how many beams do i have", "list my beams", "What beams do I have?", "show beams", "which beams are running"} {
-+		require.True(t, isBeamsListQuestion(text), text)
-+	}
-+	for _, text := range []string{"create a new beam", "what's in my beam", "make a webpage and publish it", "delete my beams", "build a site in one of my beams"} {
-+		require.False(t, isBeamsListQuestion(text), text)
-+	}
-+}
-+
-+func TestFormatBeamsList(t *testing.T) {
-+	now := time.Date(2026, 10, 1, 22, 0, 0, 0, time.UTC)
-+	out := formatBeamsList([]map[string]any{
-+		{"id": "echoing-axis", "region": "us-west-2", "expires": "2026-10-02T21:00:00.123Z"},
-+		{"id": "turbo-path", "region": "us-west-2", "expires": "2026-10-01T22:30:00Z", "url": "https://turbo-path.example"},
-+	}, now, "none")
-+	require.Equal(t, "You have *2 beams*:\n• `echoing-axis` (us-west-2), expires in 23 hours\n• `turbo-path` (us-west-2), expires in 30 minutes, published at https://turbo-path.example", out)
-+	require.Equal(t, "none", formatBeamsList(nil, now, "none"))
-+}
-+
-+func TestScottyAnswersListFromTSH(t *testing.T) {
-+	tshPath, logPath := writeFakeTSH(t)
-+	runner := BeamsCommandRunner{
-+		Config: BeamsConfig{
-+			TSHPath:     tshPath,
-+			ProfilesDir: t.TempDir(),
-+			BotName:     "scotty",
-+			Users:       map[string]string{"UALICE": "alice@example.com"},
-+		},
-+		MintIdentity: fakeMint,
-+	}
-+	ctx := t.Context()
-+	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
-+	require.NoError(t, err)
-+
-+	out, err := runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.000400", "how many beams do i have")
-+	require.NoError(t, err)
-+	require.Contains(t, out, "You have *2 beams*:")
-+	require.Contains(t, out, "`mine`")
-+	require.True(t, runner.FollowsThread("T1", "UALICE", "C1-1700000000.000400"))
-+
-+	calls, err := os.ReadFile(logPath)
-+	require.NoError(t, err)
-+	require.NotContains(t, string(calls), "beams exec", "list questions must not start Claude")
-+}
-+
-+func TestScottyBeamMeUp(t *testing.T) {
-+	for _, text := range []string{"beam me up", "Beam me up, Scotty!", "beam me up scotty", "  BEAM ME UP...  "} {
-+		require.True(t, isBeamMeUp(text), text)
-+	}
-+	for _, text := range []string{"beam me up a webpage about Seattle", "create a new beam", "what's a beam?"} {
-+		require.False(t, isBeamMeUp(text), text)
-+	}
-+
-+	// Answered without Teleport or tsh, even for a user who has not connected.
-+	runner := BeamsCommandRunner{Config: BeamsConfig{TSHPath: "/nonexistent/tsh", ProfilesDir: t.TempDir()}}
-+	out, err := runner.Ask(t.Context(), "T1", "UNOBODY", "C1-1700000000.000500", "beam me up")
-+	require.NoError(t, err)
-+	require.Contains(t, beamMeUpReplies, out)
-+	require.Contains(t, out, "securely")
-+
-+	bot := &fakeScottyBot{}
-+	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
-+	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000600"}, "beam me up, Scotty")
-+	require.Len(t, bot.replies, 1, "no \"On it\" message for the easter egg")
-+	require.Contains(t, beamMeUpReplies, bot.replies[0])
-+}
-+
-+func TestScottyBeamsIntro(t *testing.T) {
-+	for _, text := range []string{"what can i do with beams", "What can I do with Teleport Beams?", "what could we do with beams", "what are beams", "what is a beam?", "what are beams for"} {
-+		require.True(t, isBeamsIntroQuestion(text), text)
-+		require.True(t, isInstantRequest(text), text)
-+	}
-+	for _, text := range []string{"how many beams do i have", "what beams do i have", "what can i do with beams to build a website"} {
-+		require.False(t, isBeamsIntroQuestion(text), text)
-+	}
-+
-+	runner := BeamsCommandRunner{Config: BeamsConfig{TSHPath: "/nonexistent/tsh", ProfilesDir: t.TempDir()}}
-+	out, err := runner.Ask(t.Context(), "T1", "UNOBODY", "C1-1700000000.000700", "what can I do with beams?")
-+	require.NoError(t, err)
-+	require.Equal(t, beamsIntro, out)
-+	require.Contains(t, out, "/beams help")
-+	require.Contains(t, out, "https://goteleport.com/docs/beams/")
-+
-+	bot := &fakeScottyBot{}
-+	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
-+	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000800"}, "what are beams")
-+	require.Equal(t, []string{beamsIntro}, bot.replies, "no \"On it\" message for instant answers")
-+}
-+
-+func TestRequestedAgent(t *testing.T) {
-+	for text, want := range map[string]string{
-+		"use codex to make a webpage":           agentCodex,
-+		"make a webpage with Codex":             agentCodex,
-+		"codex: fix the tests":                  agentCodex,
-+		"switch back, use claude code":          agentClaude,
-+		"Claude, summarize the logs":            agentClaude,
-+		"make a webpage comparing claude codex": "",
-+		"make a webpage":                        "",
-+	} {
-+		require.Equal(t, want, requestedAgent(text), text)
-+	}
-+}
-+
-+func TestThreadStateCompatibility(t *testing.T) {
-+	path := filepath.Join(t.TempDir(), "thread")
-+	require.NoError(t, os.WriteFile(path, []byte("mine new"), 0o600))
-+	require.Equal(t, threadState{beam: "mine", fresh: true, agent: agentClaude}, readThreadState(path))
-+	require.NoError(t, writeThreadState(path, threadState{beam: "mine", agent: agentCodex}))
-+	require.Equal(t, threadState{beam: "mine", agent: agentCodex}, readThreadState(path))
-+	require.Equal(t, threadState{agent: agentClaude}, readThreadState(filepath.Join(t.TempDir(), "missing")))
-+}
-+
-+func TestScottyAgentPerThread(t *testing.T) {
-+	tshPath, logPath := writeFakeTSH(t)
-+	runner := BeamsCommandRunner{
-+		Config: BeamsConfig{
-+			TSHPath:     tshPath,
-+			ProfilesDir: t.TempDir(),
-+			BotName:     "scotty",
-+			Users:       map[string]string{"UALICE": "alice@example.com"},
-+		},
-+		MintIdentity: fakeMint,
-+	}
-+	ctx := t.Context()
-+	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
-+	require.NoError(t, err)
-+	thread := "C1-1700000000.000900"
-+
-+	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "use codex to make a page")
-+	require.NoError(t, err)
-+	require.Contains(t, out, "Using Codex for this thread.")
-+	for _, text := range []string{"make the title bigger", "use claude to review it", "thanks, tweak the colors"} {
-+		_, err := runner.Ask(ctx, "T1", "UALICE", thread, text)
-+		require.NoError(t, err, text)
-+	}
-+
-+	data, err := os.ReadFile(logPath)
-+	require.NoError(t, err)
-+	var execs []string
-+	for _, line := range strings.Split(string(data), "\n") {
-+		if strings.Contains(line, "beams exec") {
-+			execs = append(execs, line)
-+		}
-+	}
-+	require.Len(t, execs, 4)
-+	require.Contains(t, execs[0], "'codex' 'exec'")
-+	require.NotContains(t, execs[0], "'resume'")
-+	require.Contains(t, execs[1], "'codex' 'exec'")
-+	require.Contains(t, execs[1], "'resume' '--last'", "follow-ups continue the Codex conversation")
-+	require.Contains(t, execs[2], "'claude' '-p'")
-+	require.NotContains(t, execs[2], "'--continue'", "switching agents starts a fresh conversation")
-+	require.Contains(t, execs[3], "'claude' '-p'")
-+	require.Contains(t, execs[3], "'--continue'")
-+}
-+
-+func TestRemoveTargets(t *testing.T) {
-+	beams := []map[string]any{{"id": "curious-shield"}, {"id": "mint-arc"}}
-+	for _, tc := range []struct {
-+		text   string
-+		thread string
-+		names  []string
-+		ok     bool
-+	}{
-+		{text: "delete curious-shield", names: []string{"curious-shield"}, ok: true},
-+		{text: "please remove beam `mint-arc`.", names: []string{"mint-arc"}, ok: true},
-+		{text: "delete curious-shield and mint-arc", names: []string{"curious-shield", "mint-arc"}, ok: true},
-+		{text: "delete this beam", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
-+		{text: "get rid of it", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
-+		{text: "delete my beams", ok: true},
-+		{text: "delete this beam", ok: true},
-+		{text: "remove the background from the page in mint-arc"},
-+		{text: "make a page and delete the old one"},
-+		{text: "delete nonexistent-beam"},
-+	} {
-+		names, ok := removeTargets(tc.text, beams, tc.thread)
-+		require.Equal(t, tc.ok, ok, tc.text)
-+		require.Equal(t, tc.names, names, tc.text)
-+	}
-+}
-+
-+func TestScottyRemovesBeams(t *testing.T) {
-+	tshPath, logPath := writeFakeTSH(t)
-+	runner := BeamsCommandRunner{
-+		Config: BeamsConfig{
-+			TSHPath:     tshPath,
-+			ProfilesDir: t.TempDir(),
-+			BotName:     "scotty",
-+			Users:       map[string]string{"UALICE": "alice@example.com"},
-+		},
-+		MintIdentity: fakeMint,
-+	}
-+	ctx := t.Context()
-+	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
-+	require.NoError(t, err)
-+
-+	out, err := runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001000", "delete `mine`")
-+	require.NoError(t, err)
-+	require.Equal(t, "Deleted beam `mine`.", out)
-+
-+	out, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001100", "delete my beams")
-+	require.NoError(t, err)
-+	require.Contains(t, out, "Which beam should I delete?")
-+	require.Contains(t, out, "`theirs`")
-+
-+	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001200", "remove the background from the page in mine")
-+	require.NoError(t, err)
-+
-+	calls, err := os.ReadFile(logPath)
-+	require.NoError(t, err)
-+	require.Equal(t, 1, strings.Count(string(calls), "beams rm "), "only the explicit delete removes a beam")
-+	require.Contains(t, string(calls), "beams rm mine\n")
-+	require.Contains(t, string(calls), "beams exec mine", "the page edit goes to the agent")
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..b48a4703dd4 100644

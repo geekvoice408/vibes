@@ -16,15 +16,22 @@ Working end to end on the live deployment:
   has `beam-user`
 - Every beam action runs as the user through a delegation session; the plugin
   asks for one (with the exact `tsh` command) when missing or expired
-- Scotty (mentions, DMs, `scotty ...`, thread follow-ups) running Claude Code
+- Teleport Beams Bot (mentions, DMs, "Teleport Beams Bot ...", thread
+  follow-ups; formerly called Scotty) running Claude Code
   inside beams
 - `tbot` sidecar keeping the plugin identity renewed
 
 Users own every beam created from Slack, so published URLs open for them.
 The plugin never acts on beams as its own bot identity. Verified live on
-2026-10-01: after connecting, Scotty ran Claude in the user's own beam. A
-normal Scotty request takes about a minute (a full Claude Code session in the
+2026-10-01: after connecting, the bot ran Claude in the user's own beam. A
+normal bot request takes about a minute (a full Claude Code session in the
 beam); beam-list questions skip Claude.
+
+The bot was renamed from "Scotty" to "Teleport Beams Bot" on 2026-10-05: the
+typed trigger is now "Teleport Beams Bot ..." (`botPrefix`; "scotty ..." no
+longer triggers), and new deployments name the Machine ID bot
+`teleport-beams-bot`. Existing deployments keep whatever `bot_name` they were
+set up with; renaming that bot would invalidate users' delegation sessions.
 
 ## Repositories
 
@@ -53,7 +60,7 @@ beam); beam-list questions skip Claude.
 - Earlier work was done by Codex in `/home/beams/work/...`. Those paths are
   obsolete.
 - `assets/slack-beams-bot.png` (1024 x 1024 PNG, background `#3B2A9E`) is the
-  Slack app icon; README "Set Scotty's icon" has the upload steps.
+  Slack app icon; README "Set the bot's icon" has the upload steps.
 - `assets/screenshots/` holds the README screenshots. Two were edited to hide
   the real tenant name; check new screenshots for it before adding them.
 
@@ -67,14 +74,14 @@ beam); beam-list questions skip Claude.
   command's `response_url` as ephemeral messages, so the bot does not need to
   be in the channel for slash commands.
 - `events_api` envelopes (`app_mention`, `message.*`) become
-  `BeamsMessageEvent`. Scotty replies in a thread with `chat.postMessage`.
+  `BeamsMessageEvent`. The bot replies in a thread with `chat.postMessage`.
 - Slash-command replies are posted as-is. Raw `tsh` output (`add`, `exec`,
   `claude`, `codex`, `publish`, ...) goes through `codeBlock`; `ls` uses
-  `formatBeamsList` (same list Scotty shows); messages such as the
+  `formatBeamsList` (same list the bot shows); messages such as the
   authorization prompt carry their own formatting. Wrapping every multi-line
   reply used to double-wrap the prompt's code block.
 - Duplicate deliveries are dropped by `channel-ts` (`recentSet`, last 1000).
-- `threadQueue` allows one Scotty run per thread. Messages arriving mid-run
+- `threadQueue` allows one bot run per thread. Messages arriving mid-run
   get "Still working on your earlier request" and only the newest is kept;
   it runs (with `--continue`) when the current run ends. Before this,
   follow-ups started overlapping Claude runs in the same beam with no shared
@@ -95,7 +102,7 @@ has never signed in is denied until they do.
 ### Identities and ownership
 
 Every beam action (`ls`, `add`, `exec`, `claude`, `codex`, `publish`, `unpublish`,
-`rm`, `scp`, and all of Scotty) runs as the user:
+`rm`, `scp`, and all bot requests) runs as the user:
 
 - `userIdentity` calls delegation `GenerateCerts` with the bot's `tbot`
   identity to mint a short-lived certificate for the user (CN checked against
@@ -159,13 +166,14 @@ string over `tsh beams exec`:
   answer. Not yet tried live in a beam.
 
 Beams ship both CLIs preconfigured (`~/AGENTS.md` lists the Anthropic and
-OpenAI credentials). Scotty uses either; see below.
+OpenAI credentials). The bot uses either; see below.
 
-### Scotty (`beams_scotty.go`)
+### Teleport Beams Bot (`beams_bot.go`)
 
-1. `scottyRequest` decides whether a message is for Scotty. These count:
-   `app_mention`, DMs, channel messages starting with `scotty`, and replies
-   in a thread the same user already has with Scotty (`FollowsThread`
+1. `botRequest` decides whether a message is for the bot. These count:
+   `app_mention`, DMs, channel messages starting with "Teleport Beams Bot"
+   (`botPrefix`), and replies in a thread the same user already has with the
+   bot (`FollowsThread`
    checks `<profile>/threads/<channel>-<thread_ts>`). Bot messages, edits,
    and other subtypes are ignored.
 2. `Ask` requires delegation. If the user is not connected, it saves the
@@ -191,18 +199,18 @@ OpenAI credentials). Scotty uses either; see below.
    `tsh beams exec` as one shell-quoted string, with `claude_timeout` (15m).
    The prompt calls the beam an "ephemeral Debian runtime" (never "sandbox")
    and tells Claude to reply directly without restating the request.
-6. Claude ends its reply with `SCOTTY_ACTION: publish|unpublish|create_beam`
+6. Claude ends its reply with `BEAMS_BOT_ACTION: publish|unpublish|create_beam`
    lines. The plugin strips those, runs the actions, and appends the results
    (for example the publish URL). `create_beam` switches the thread to the
    new beam; the thread file is marked `<beam> new` until a Claude run
    succeeds there, so the next run does not pass `--continue`.
 7. Inside a beam, Claude has preconfigured Anthropic/OpenAI credentials and
    its own `tsh`. The beam's `~/AGENTS.md` says it can run
-   `tsh beams publish $BEAM_ALIAS` itself. `SCOTTY_ACTION` remains as the
+   `tsh beams publish $BEAM_ALIAS` itself. `BEAMS_BOT_ACTION` remains as the
    path the plugin controls.
 
 Easter egg: a request that is only "beam me up" (optionally "Scotty",
-`beamMeUp` regex) gets a random Scotty-style reply from `beamMeUpReplies`
+`beamMeUp` regex) gets a random reply in the voice of Star Trek's Scotty from `beamMeUpReplies`
 before any authorization or Teleport call, and no "On it" message.
 
 "What can I do with beams" style questions (`beamsIntroQuestion`) return the
@@ -213,7 +221,7 @@ it if the Beams docs (limits, features) change.
 Deleting: `removeTargets` treats a request as a delete only when beam names
 (or "beam"/"this"/"it") directly follow delete/remove/rm/destroy/"get rid
 of"; the plugin then runs `tsh beams rm` itself (no agent) and clears the
-thread's beam if deleted. Slash and Scotty arguments have Slack code
+thread's beam if deleted. Slash and bot arguments have Slack code
 backticks trimmed (`trimSlackCode`); pasting a code-formatted beam name used
 to fail with "does not exist". `cleanTSHError` drops tsh's "cannot relogin in
 non-interactive session" line.
@@ -223,8 +231,8 @@ non-interactive session" line.
 ```text
 /var/lib/teleport-slack/beams/<slack-team-id>/<slack-user-id>/
   delegation-session   delegation session ID after /beams connect
-  threads/<ch>-<ts>    beam used by each Scotty thread ("<beam> new" = no Claude conversation yet)
-  threads/<ch>-<ts>.pending  request waiting for the user to authorize Scotty
+  threads/<ch>-<ts>    beam used by each bot thread ("<beam> new" = no Claude conversation yet)
+  threads/<ch>-<ts>.pending  request waiting for the user to authorize the bot
   identity-*           temp delegated identities, deleted after each command
 ```
 
@@ -284,7 +292,7 @@ Test identities: Slack workspace `T03PXFLJF`, user `U049LDB6K` mapped to
    owned by `bot-scotty`, so users could not open their published URLs.
    Removed.
 6. **Delegation required everywhere** (current). The plugin prompts with the
-   `tsh` command; Scotty accepts the session ID pasted in its thread and
+   `tsh` command; the bot accepts the session ID pasted in its thread and
    resumes the original request.
 7. **A `tbot` sidecar** replaced the hand-signed `access-plugin` identity,
    which did not renew and could not use delegation.
@@ -297,7 +305,7 @@ was expected, broken line continuations).
 
 ## Open items
 
-1. Confirm a Scotty-published URL opens for its owner (Scotty already runs
+1. Confirm a bot-published URL opens for its owner (the bot already runs
    as the user; publishing as the user is not yet verified live).
 2. Test `scp` and `unpublish` from Slack.
 3. Confirm Teleport audit events attribute delegated actions to both the human

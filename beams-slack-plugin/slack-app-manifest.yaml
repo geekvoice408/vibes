@@ -3,7 +3,7 @@
 # the app icon, install the app, and create an app-level token with
 # connections:write (see README).
 display_information:
-  name: Scotty
+  name: Teleport Beams Bot
   description: Create and run Teleport Beams from Slack.
   background_color: "#3b2a9e"
 features:
@@ -12,7 +12,7 @@ features:
     messages_tab_enabled: true
     messages_tab_read_only_enabled: false
   bot_user:
-    display_name: Scotty
+    display_name: Teleport Beams Bot
     always_online: true
   slash_commands:
     - command: /beams

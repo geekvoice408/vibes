@@ -1,9 +1,9 @@
 # Beams Slack Plugin
 
-<img src="assets/slack-beams-bot.png" alt="Scotty, the Beams Slack bot" width="128" align="right">
+<img src="assets/slack-beams-bot.png" alt="Teleport Beams Bot" width="128" align="right">
 
 Manage [Teleport Beams](https://goteleport.com/) from Slack, either with a
-`/beams` slash command or by asking **Scotty** in plain language ("@scotty
+`/beams` slash command or by asking the **Teleport Beams Bot** in plain language ("@Teleport Beams Bot
 make a webpage about things to do in Seattle and publish it").
 
 It is Teleport's Slack access plugin with a Beams app added. It is built from
@@ -20,8 +20,9 @@ over Socket Mode, and needs no inbound ports or public URL.
 
 - **`/beams` slash commands**: list, create, run commands in, publish, copy
   files to, and delete beams. Replies are private to the person who ran them.
-- **Scotty**: mention the app, DM it, or start a message with `scotty`.
-  Scotty picks or creates one of your beams, runs Claude Code or Codex inside
+- **Teleport Beams Bot**: mention `@Teleport Beams Bot`, DM it, or start a
+  message with "Teleport Beams Bot".
+  Teleport Beams Bot picks or creates one of your beams, runs Claude Code or Codex inside
   it with your request, publishes the result if asked, and replies in a
   thread. Replies in that thread continue the same beam and conversation.
 - **Who you are**: the plugin looks up your Slack email, finds the Teleport
@@ -34,7 +35,7 @@ over Socket Mode, and needs no inbound ports or public URL.
 
 Ask for a web page and get back a URL you can open:
 
-<img src="assets/screenshots/scotty-publish-webpage.png" alt="Scotty builds a page about Seattle's Ballard neighborhood in a beam and replies with the published URL" width="560">
+<img src="assets/screenshots/bot-publish-webpage.png" alt="Teleport Beams Bot builds a page about Seattle's Ballard neighborhood in a beam and replies with the published URL" width="560">
 
 ## Usage
 
@@ -44,26 +45,26 @@ is recorded under your name, and it cleans itself up after a day.
 
 Here's what you can do, right in Slack:
 
-- **Ask Scotty for things in plain English.** For example: "@Scotty make a
-  webpage about things to do in Ballard and share it." Scotty does the work in
+- **Ask the bot for things in plain English.** For example: "@Teleport Beams Bot make
+  a webpage about things to do in Ballard and share it." Teleport Beams Bot does the work in
   one of your beams and replies with a link.
 - **Keep going in the same thread** to make changes, like "make the title
   bigger."
-- **Share what you made.** Ask Scotty to publish it and you get a link you can
+- **Share what you made.** Ask the bot to publish it and you get a link you can
   open after signing in to Teleport.
 - **See your beams** by asking "how many beams do I have?"
-- **Start fresh** by asking for a new beam, and **clean up** by asking Scotty
+- **Start fresh** by asking for a new beam, and **clean up** by asking Teleport Beams Bot
   to "delete curious-shield" (or "delete this beam" in its thread).
-- **Pick your assistant.** Scotty uses Claude Code unless you say "use codex"
+- **Pick your assistant.** Teleport Beams Bot uses Claude Code unless you say "use codex"
   (or "use claude" to switch back).
 
 Comfortable with commands? `/beams help` lists everything, including running
 Claude Code or Codex yourself (see [Slash commands](#slash-commands)).
 
-Scotty gives this same overview if you ask him "what can I do with beams?"
+Teleport Beams Bot gives this same overview if you ask it "what can I do with beams?"
 or "what is a beam?":
 
-<img src="assets/screenshots/scotty-what-is-a-beam.png" alt="Scotty answers 'what is a beam' with a plain-language overview of Teleport Beams and what you can do in Slack" width="560">
+<img src="assets/screenshots/bot-what-is-a-beam.png" alt="Teleport Beams Bot answers 'what is a beam' with a plain-language overview of Teleport Beams and what you can do in Slack" width="560">
 
 Learn more in the [Teleport Beams docs](https://goteleport.com/docs/beams/).
 
@@ -100,8 +101,8 @@ Learn more in the [Teleport Beams docs](https://goteleport.com/docs/beams/).
   `--continue` (or `-c`) resumes that agent's previous conversation in the
   beam, for example `/beams codex fabled-firefly -c add a dark mode`.
   Everything after the beam name (and `-c`) is sent as typed, so prompts can
-  contain apostrophes without quoting. Scotty can use either one; see
-  [Scotty](#scotty).
+  contain apostrophes without quoting. Teleport Beams Bot can use either one; see
+  [Teleport Beams Bot](#teleport-beams-bot).
 - `publish` exposes port 8080 in the beam as a Teleport app.
 - Interactive `/beams ssh` is not supported; use `exec`.
 - A brand-new beam takes a moment to accept SSH; commands retry for up to 3
@@ -109,16 +110,17 @@ Learn more in the [Teleport Beams docs](https://goteleport.com/docs/beams/).
 - Until you connect, every beam command replies with the authorization
   instructions instead of running.
 
-## Scotty
+## Teleport Beams Bot
 
-Talk to Scotty in any of these ways:
+Talk to Teleport Beams Bot in any of these ways:
 
-- `@scotty <request>` in a channel the app is in
+- `@Teleport Beams Bot <request>` in a channel the app is in
 - a direct message to the app
-- a channel message starting with `scotty` (needs the `message.channels` event)
-- a reply in a thread Scotty is already working in (no mention needed)
+- a channel message starting with "Teleport Beams Bot" (needs the
+  `message.channels` event)
+- a reply in a thread Teleport Beams Bot is already working in (no mention needed)
 
-The first time (and again when your authorization expires), Scotty replies:
+The first time (and again when your authorization expires), Teleport Beams Bot replies:
 
 > **Before we can get started, you need to allow me to create beams as you.**
 >
@@ -126,21 +128,21 @@ The first time (and again when your authorization expires), Scotty replies:
 >    `tsh delegation create-session ...`
 > 2. Reply here with the session ID it prints and I'll pick up your request.
 
-Paste the session ID (or the whole command output) into the thread. Scotty
+Paste the session ID (or the whole command output) into the thread. Teleport Beams Bot
 connects you and then carries out the request you made. This is the same
 connection `/beams connect` makes, and it lasts up to 7 days.
 
 Questions about which beams you have ("how many beams do I have", "list my
 beams") are answered straight from `tsh beams ls` in a second or two. Anything
 else starts a Claude Code or Codex session in a beam, which usually takes a minute or
-more; Scotty posts "On it" right away so you know it is working. Scotty works
+more; Teleport Beams Bot posts "On it" right away so you know it is working. Teleport Beams Bot works
 on one request per thread at a time: if you send another message while it is
 busy, it replies "Still working on your earlier request" and handles your
 newest message as soon as the current one finishes.
 
-<img src="assets/screenshots/scotty-list-beams.png" alt="Scotty answers 'how many beams do I have' with a list of beams, regions, and expiry times" width="560">
+<img src="assets/screenshots/bot-list-beams.png" alt="Teleport Beams Bot answers 'how many beams do I have' with a list of beams, regions, and expiry times" width="560">
 
-For each other request Scotty:
+For each other request, Teleport Beams Bot:
 
 1. Picks one of your own beams: the one this thread already uses, a beam you
    named, or your newest. If you have none, it creates one, owned by you.
@@ -156,29 +158,29 @@ For each other request Scotty:
 
 Asking for another beam creates one, and the rest of that thread works in it:
 
-<img src="assets/screenshots/scotty-create-beam.png" alt="Scotty creates a new beam on request" width="560">
+<img src="assets/screenshots/bot-create-beam.png" alt="Teleport Beams Bot creates a new beam on request" width="560">
 
-To delete beams, tell Scotty "delete" followed by their names (for example
+To delete beams, tell Teleport Beams Bot "delete" followed by their names (for example
 "delete curious-shield and mint-arc"), or "delete this beam" in the beam's
-thread. Scotty handles this itself rather than asking the coding agent, and
+thread. Teleport Beams Bot handles this itself rather than asking the coding agent, and
 only when the beam names come right after the word "delete" or "remove", so a
 request like "remove the header from the page in mint-arc" is still sent to
 the agent. You can also use `/beams rm <name>`.
 
-Scotty is an engineer, not a transporter operator, so don't ask him for a
-lift.
+Teleport Beams Bot is an engineer at heart, not a transporter operator, so
+don't ask it for a lift.
 
 ## Authorizing the plugin to act as you
 
 Teleport v18 does not let a bot impersonate an SSO user, and only you can
 create a delegation session for yourself (with MFA). So the first time you use
-`/beams` or Scotty, and again when your authorization expires, the plugin
+`/beams` or Teleport Beams Bot, and again when your authorization expires, the plugin
 replies:
 
 > **Before we can get started, you need to allow me to create beams as you.**
 >
 > 1. Run this in a terminal where you're signed in to Teleport:
->    `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --bot=scotty --allow-all --session-ttl=168h`
+>    `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --bot=teleport-beams-bot --allow-all --session-ttl=168h`
 > 2. Run `/beams connect <session-id>` with the ID it prints.
 
 This is how the prompt looks in reply to a slash command (the tenant name is
@@ -188,7 +190,7 @@ hidden):
 
 Run it, then hand back the session ID it prints:
 
-- with Scotty: reply in the thread (no mention needed); Scotty then carries
+- with Teleport Beams Bot: reply in the thread (no mention needed); Teleport Beams Bot then carries
   out the request you made
 - with slash commands: `/beams connect <session-id>`
 
@@ -202,7 +204,7 @@ The plugin never creates or touches beams as its own bot identity.
 
 ### 1. Teleport
 
-The plugin runs as a Machine ID bot (named `scotty` here). Its role needs
+The plugin runs as a Machine ID bot (named `teleport-beams-bot` here). Its role needs
 `read` and `list` on `user` and `user_login_state` so it can match Slack
 emails to Teleport users. The deployment uses `access-plugin` (the role
 Teleport's Slack plugin normally uses, extended with those rules) plus
@@ -210,8 +212,8 @@ Teleport's Slack plugin normally uses, extended with those rules) plus
 the bot does not strictly need `beam-user` any more.
 
 ```sh
-tctl bots add scotty --roles=access-plugin,beam-user    # or: tctl bots update scotty --set-roles=...
-tctl bots instances add scotty                         # prints a one-time join token
+tctl bots add teleport-beams-bot --roles=access-plugin,beam-user    # or: tctl bots update teleport-beams-bot --set-roles=...
+tctl bots instances add teleport-beams-bot                         # prints a one-time join token
 ```
 
 Each person who uses the plugin needs a Teleport user whose username is their
@@ -233,20 +235,20 @@ app-level token and the icon. To configure an existing app by hand instead:
 - **Event Subscriptions**: on (no request URL needed with Socket Mode).
   Subscribe to bot events `app_mention`, `message.im`, `message.channels`,
   and `message.groups` for private channels. The plugin ignores channel
-  messages that are not meant for Scotty.
+  messages that are not meant for Teleport Beams Bot.
 - **OAuth & Permissions, Bot Token Scopes**: `commands`, `chat:write`,
   `users:read`, `users:read.email`, `app_mentions:read`, `im:history`,
   `channels:history`, `groups:history`.
 - **App Home**: enable the Messages tab and "Allow users to send messages".
-  Set the display name to `scotty`.
-- **App icon**: see [Set Scotty's icon](#set-scottys-icon) below.
+  Set the display name to `Teleport Beams Bot`.
+- **App icon**: see [Set the bot's icon](#set-the-bots-icon) below.
 - **Install / Reinstall to Workspace** after any scope change, then
   `/invite` the app to the channels where it should listen. Once added, it
   shows under the channel's **Agents & apps** tab:
 
   <img src="assets/screenshots/slack-channel-app.png" alt="The Teleport Beams app listed under a channel's Agents and apps tab" width="480">
 
-#### Set Scotty's icon
+#### Set the bot's icon
 
 The bot's icon is [`assets/slack-beams-bot.png`](assets/slack-beams-bot.png), a
 1024 x 1024 PNG.
@@ -259,9 +261,9 @@ The bot's icon is [`assets/slack-beams-bot.png`](assets/slack-beams-bot.png), a
    Icon** (or the current icon) and upload `slack-beams-bot.png`. Slack accepts
    square images from 512 x 512 to 2000 x 2000 pixels.
 4. Set **Background color** to `#3B2A9E`, the icon's own purple, so it
-   blends in. Set **App name** to `Scotty` and fill in a short description if
+   blends in. Set **App name** to `Teleport Beams Bot` and fill in a short description if
    you like.
-5. Click **Save Changes**. The new icon appears on Scotty's messages and
+5. Click **Save Changes**. The new icon appears on the bot's messages and
    profile within a few minutes. No reinstall is needed for the icon.
 
 ### 3. Build and host the image
@@ -304,7 +306,7 @@ docker compose logs tbot               # should show "Identity initialized succe
 The stack has three services:
 
 - `volume-init` gives the shared volumes to UID 10001 and exits.
-- `tbot` joins as `scotty` and keeps an identity file renewed (every 20
+- `tbot` joins as `teleport-beams-bot` and keeps an identity file renewed (every 20
   minutes) in the `plugin-identity` volume. The join token is only used once;
   `tbot` renews from the `tbot-state` volume afterwards. If that volume is
   lost, or `tbot` is down longer than its 1 hour certificate, create a new
@@ -326,20 +328,20 @@ Start from `config.toml.example`. The Beams settings:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `enabled` | `false` | Turn on `/beams` and Scotty |
+| `enabled` | `false` | Turn on `/beams` and Teleport Beams Bot |
 | `proxy` | `teleport.addr` | Teleport proxy for `tsh` |
 | `plugin_identity` | `teleport.identity` | Identity file from `tbot` |
 | `tsh_path` | `tsh` | `tsh` binary (bundled in the image) |
 | `profiles_dir` | temp dir | Per-user state; use the `beams-profiles` volume |
 | `required_role` | none | Teleport role a Slack user's matching Teleport user must have |
 | `users` | none | Optional `"<slack-user-id>" = "<teleport-user>"` overrides that skip the role check |
-| `bot_name` | none | Bot named in delegation sessions (`scotty`); required to use Beams |
+| `bot_name` | none | Bot named in delegation sessions (`teleport-beams-bot`); required to use Beams |
 | `delegation_ttl` | `168h` | Session length in the suggested `tsh` command (Teleport max 7 days) |
 | `identity_ttl` | `15m` | Lifetime of per-command delegated certificates (max 1h) |
 | `command_timeout` | `2m` | Limit for normal commands |
-| `claude_timeout` | `15m` | Limit for `/beams claude` and Scotty's Claude runs |
+| `claude_timeout` | `15m` | Limit for `/beams claude` and the bot's Claude runs |
 | `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags. Print mode cannot ask for tool approval, and beams are throwaway runtimes. |
-| `codex_timeout` | `15m` | Limit for `/beams codex` and Scotty's Codex runs |
+| `codex_timeout` | `15m` | Limit for `/beams codex` and the bot's Codex runs |
 | `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
@@ -349,7 +351,7 @@ for the `xapp-` token even when access-request review is disabled.
 
 [`terraform/`](terraform) deploys the whole stack in one apply:
 
-- **Teleport:** the `scotty` bot (roles `access-plugin`, Teleport's preset
+- **Teleport:** the `teleport-beams-bot` bot (roles `access-plugin`, Teleport's preset
   role for access plugins, plus `beam-user`) and a `bound_keypair` join token
   with a generated registration secret. Unlike a one-time join token, it isn't
   used up, so later applies leave the running `tbot` alone, and `tbot` can
@@ -452,9 +454,9 @@ Main files under `integrations/access/slack/`:
 
 | File | Purpose |
 | --- | --- |
-| `beams_app.go` | Socket Mode loop, slash-command and Scotty message handlers |
+| `beams_app.go` | Socket Mode loop, slash-command and Teleport Beams Bot message handlers |
 | `beams_commands.go` | `/beams` commands, user lookup, delegation and authorization prompts, `tsh` runner |
-| `beams_scotty.go` | Scotty request parsing, beam and agent choice, agent prompt, actions |
+| `beams_bot.go` | Teleport Beams Bot request parsing, beam and agent choice, agent prompt, actions |
 | `socketmode.go`, `types.go` | Slash-command and Events API envelope decoding |
 | `bot.go` | Slack replies (`response_url` and threaded `chat.postMessage`) |
 | `config.go` | `[beams]` settings and validation |
