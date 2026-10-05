@@ -60,6 +60,9 @@ Here's what you can do, right in Slack:
   in the thread keep the conversation going. Requests that need a computer,
   like writing code or building a page, go to a beam automatically. Every
   request is recorded in Teleport's audit log under your name.
+- **Attach files.** Add an image to your message ("tell me about this image")
+  and the bot looks at it. Other files, or work like "make a webpage with this
+  photo", are copied into your beam for the coding agent to use.
 
   <img src="assets/screenshots/bot-chat-answer.png" alt="Asked what to have for lunch, Teleport Beams Bot says 'Just a moment while I look into this.' and then answers with lunch ideas, without starting a beam" width="560">
 
@@ -205,6 +208,20 @@ models it serves. Claude chats use the Anthropic Messages API and Codex chats
 the OpenAI Responses API, the routes Teleport's model apps serve for every
 model. `disable_chat = true` turns chat answers off.
 
+### Attachments
+
+Files attached to a message (or posted on their own in a bot thread) come
+with the request. The bot downloads them with the `files:read` scope, only
+from Slack's file hosts, up to 5 files of 20 MB each.
+
+- **Images in chat:** up to two JPEG, PNG, GIF, or WebP images of 3.5 MB each
+  are sent to the model with the question, so it can describe or discuss
+  them. The chat history keeps only a note of the image.
+- **Anything else** (other file types, larger or more images, or requests that
+  need a computer) runs in a beam. The files are copied into
+  `/tmp/slack-attachments/` there with `tsh beams scp` as you, and the coding
+  agent is told their paths.
+
 ### Work in a beam
 
 For requests that need a computer, Teleport Beams Bot:
@@ -303,7 +320,7 @@ app-level token and the icon. To configure an existing app by hand instead:
   messages that are not meant for Teleport Beams Bot.
 - **OAuth & Permissions, Bot Token Scopes**: `commands`, `chat:write`,
   `users:read`, `users:read.email`, `app_mentions:read`, `im:history`,
-  `channels:history`, `groups:history`.
+  `channels:history`, `groups:history`, `files:read` (for attachments).
 - **App Home**: enable the Messages tab and "Allow users to send messages".
   Set the display name to `Teleport Beams Bot`.
 - **App icon**: see [Set the bot's icon](#set-the-bots-icon) below.

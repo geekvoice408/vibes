@@ -268,6 +268,17 @@ posts "On it. Working in your beam...". When a possible chat request moves to
 a beam, `Handle` posts "This needs a computer, so I'm working in one of your
 beams..." through `reportProgress` (a callback the app puts in the context).
 
+Attachments (`beams_files.go`): events carry `files` (uploads arrive as
+subtype `file_share`, now accepted; file-only messages become "Here's an
+attachment."). The app downloads them with `Bot.DownloadSlackFile` (plain
+HTTP with the bot token, only `files.slack.com`/`files-origin.slack.com`,
+needs `files:read`; Slack returns an HTML login page without it), up to 5
+files of 20 MB, and passes them in the context (`withAttachments`). Chat
+sends up to 2 images of 3.5 MB (Teleport's model proxy caps requests at
+10 MiB) as Anthropic `image` blocks or Responses `input_image` data URLs;
+history keeps "[attached name]". Otherwise the request goes to a beam and
+files are copied with `tsh beams scp` into `/tmp/slack-attachments/`.
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text

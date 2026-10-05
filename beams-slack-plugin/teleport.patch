@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..4cab3ee0d03
+index 00000000000..8e523c0b256
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,356 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -115,6 +115,7 @@ index 00000000000..4cab3ee0d03
 +	LookupEmailByUserID(ctx context.Context, userID string) (string, error)
 +	PostBeamsThreadReply(ctx context.Context, channelID, threadTS, text string) error
 +	TeleportClusterName() string
++	DownloadSlackFile(ctx context.Context, fileURL string, limit int64) ([]byte, error)
 +}
 +
 +type beamsRunner interface {
@@ -306,6 +307,13 @@ index 00000000000..4cab3ee0d03
 +		}
 +	}
 +	ctx = withProgress(ctx, func(text string) { a.reply(ctx, event, threadTS, text) })
++	if len(event.Files) > 0 {
++		files, notes := a.downloadAttachments(ctx, event.Files)
++		for _, note := range notes {
++			a.reply(ctx, event, threadTS, note)
++		}
++		ctx = withAttachments(ctx, files)
++	}
 +
 +	result, err := a.runner.Handle(ctx, event.TeamID, event.User, threadKey, request)
 +	if err != nil {
@@ -323,6 +331,34 @@ index 00000000000..4cab3ee0d03
 +		origin := BeamsMessageEvent{TeamID: event.TeamID, User: event.User, Channel: resume.Channel, TS: resume.ThreadTS}
 +		go a.handleMessage(ctx, origin, resume.Text)
 +	}
++}
++
++// maxAttachments and maxAttachmentSize bound what the bot downloads from one
++// message.
++const (
++	maxAttachments    = 5
++	maxAttachmentSize = 20 << 20
++)
++
++// downloadAttachments fetches a message's files. Files it cannot use are
++// reported in notes rather than failing the request.
++func (a *BeamsApp) downloadAttachments(ctx context.Context, files []SlackFile) ([]attachment, []string) {
++	var out []attachment
++	var notes []string
++	for i, file := range files {
++		if i == maxAttachments {
++			notes = append(notes, fmt.Sprintf("I only use the first %d attachments.", maxAttachments))
++			break
++		}
++		data, err := a.bot.DownloadSlackFile(ctx, file.URLPrivate, maxAttachmentSize)
++		if err != nil {
++			logger.Get(ctx).WarnContext(ctx, "Failed to download Slack attachment", "file", file.Name, "error", err)
++			notes = append(notes, fmt.Sprintf("I couldn't read `%s`: %s", file.Name, trace.UserMessage(err)))
++			continue
++		}
++		out = append(out, attachment{Name: file.Name, MimeType: file.Mimetype, Data: data})
++	}
++	return out, notes
 +}
 +
 +func (a *BeamsApp) reply(ctx context.Context, event BeamsMessageEvent, threadTS, text string) {
@@ -403,10 +439,10 @@ index 00000000000..4cab3ee0d03
 +}
 diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
 new file mode 100644
-index 00000000000..c6667624794
+index 00000000000..ef5fe8bd3e1
 --- /dev/null
 +++ b/integrations/access/slack/beams_app_test.go
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,196 @@
 +package slack
 +
 +import (
@@ -416,6 +452,7 @@ index 00000000000..c6667624794
 +	"testing"
 +	"time"
 +
++	"github.com/gravitational/trace"
 +	"github.com/stretchr/testify/require"
 +)
 +
@@ -578,12 +615,36 @@ index 00000000000..c6667624794
 +
 +func (r *blockingRunner) ThreadUsesBeam(string, string, string) bool { return true }
 +func (r *authRunner) ThreadUsesBeam(string, string, string) bool     { return true }
++
++func (b *fakeBeamsBot) DownloadSlackFile(_ context.Context, fileURL string, _ int64) ([]byte, error) {
++	if strings.Contains(fileURL, "forbidden") {
++		return nil, trace.AccessDenied("Slack did not return the file; the app needs the files:read scope")
++	}
++	return []byte("file from " + fileURL), nil
++}
++
++func TestDownloadAttachments(t *testing.T) {
++	app := &BeamsApp{bot: &fakeBeamsBot{}}
++	files, notes := app.downloadAttachments(t.Context(), []SlackFile{
++		{Name: "dog.png", Mimetype: "image/png", URLPrivate: "https://files.slack.com/dog.png"},
++		{Name: "secret.pdf", Mimetype: "application/pdf", URLPrivate: "https://files.slack.com/forbidden.pdf"},
++	})
++	require.Equal(t, []attachment{{Name: "dog.png", MimeType: "image/png", Data: []byte("file from https://files.slack.com/dog.png")}}, files)
++	require.Equal(t, []string{"I couldn't read `secret.pdf`: Slack did not return the file; the app needs the files:read scope"}, notes)
++}
++
++func TestDownloadSlackFileRefusesOtherHosts(t *testing.T) {
++	_, err := Bot{}.DownloadSlackFile(t.Context(), "https://example.com/steal-token", 10)
++	require.ErrorContains(t, err, "refusing to download")
++	_, err = Bot{}.DownloadSlackFile(t.Context(), "http://files.slack.com/x", 10)
++	require.ErrorContains(t, err, "refusing to download")
++}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..3dc668203c9
+index 00000000000..30e1eb956fc
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,693 @@
+@@ -0,0 +1,710 @@
 +package slack
 +
 +import (
@@ -625,7 +686,9 @@ index 00000000000..3dc668203c9
 +// has with the bot (followUp) always count; other channel messages count only
 +// when they start with "Teleport Beams Bot".
 +func botRequest(event BeamsMessageEvent, followUp bool) (string, bool) {
-+	if event.User == "" || event.BotID != "" || event.Subtype != "" {
++	// Uploads arrive as "file_share" messages; other subtypes are edits,
++	// joins, bot posts, and the like.
++	if event.User == "" || event.BotID != "" || (event.Subtype != "" && event.Subtype != "file_share") {
 +		return "", false
 +	}
 +	text := strings.TrimSpace(slackMention.ReplaceAllString(event.Text, ""))
@@ -638,6 +701,9 @@ index 00000000000..3dc668203c9
 +		return "", false
 +	}
 +	text = strings.TrimSpace(text)
++	if text == "" && len(event.Files) > 0 {
++		text = "Here's an attachment."
++	}
 +	return text, text != ""
 +}
 +
@@ -803,8 +869,10 @@ index 00000000000..3dc668203c9
 +	// directly through Teleport's LLM app, as the user: quick, no beam, and
 +	// audited. The model hands off requests that need a computer.
 +	var chatHistory []chatMessage
-+	if thread.beam == "" && r.chatEnabled() && !namesBeam(beams, text) {
-+		reply, handoff, history, err := s.chatTurn(ctx, chatHistoryPath(threadsDir, threadKey), agent, text)
++	files := attachmentsFrom(ctx)
++	images, imagesFit := chatImages(files)
++	if thread.beam == "" && r.chatEnabled() && !namesBeam(beams, text) && imagesFit {
++		reply, handoff, history, err := s.chatTurn(ctx, chatHistoryPath(threadsDir, threadKey), agent, text, images)
 +		switch {
 +		case needsAuthorization(err):
 +			return s.requestAuthorization(channel, threadTS, text)
@@ -850,11 +918,21 @@ index 00000000000..3dc668203c9
 +		return AskResult{}, trace.Wrap(err)
 +	}
 +
++	// Copy attachments into the beam for the agent.
++	request := text
++	if len(files) > 0 {
++		paths, err := s.uploadAttachments(ctx, name, files)
++		if err != nil {
++			return AskResult{}, trace.Wrap(err)
++		}
++		request = text + "\n\n" + attachmentPrompt(paths)
++	}
++
 +	agentArgs := []string{name}
 +	if continued {
 +		agentArgs = append(agentArgs, "--continue")
 +	}
-+	agentArgs = append(agentArgs, botPrompt(name, s.username, created, chatContext(chatHistory), text))
++	agentArgs = append(agentArgs, botPrompt(name, s.username, created, chatContext(chatHistory), request))
 +	run := s.claude
 +	if agent == agentCodex {
 +		run = s.codex
@@ -1279,10 +1357,10 @@ index 00000000000..3dc668203c9
 +}
 diff --git a/integrations/access/slack/beams_bot_test.go b/integrations/access/slack/beams_bot_test.go
 new file mode 100644
-index 00000000000..9e1c5978d9b
+index 00000000000..86324dfead0
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot_test.go
-@@ -0,0 +1,491 @@
+@@ -0,0 +1,493 @@
 +package slack
 +
 +import (
@@ -1313,6 +1391,8 @@ index 00000000000..9e1c5978d9b
 +		{name: "longer word", event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Text: "teleport beams bots are neat"}},
 +		{name: "bot message", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", BotID: "B1", Text: "hi"}},
 +		{name: "edit", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Subtype: "message_changed", Text: "hi"}},
++		{name: "image only in a thread", followUp: true, event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Subtype: "file_share", Files: []SlackFile{{Name: "dog.png"}}}, want: "Here's an attachment."},
++		{name: "mention with an image", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT> tell me about this image", Files: []SlackFile{{Name: "dog.png"}}}, want: "tell me about this image"},
 +		{name: "empty mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT>"}},
 +		{name: "thread follow-up", followUp: true, event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", ThreadTS: "1.2", Text: "how's that going?"}, want: "how's that going?"},
 +	} {
@@ -1776,10 +1856,10 @@ index 00000000000..9e1c5978d9b
 +}
 diff --git a/integrations/access/slack/beams_chat.go b/integrations/access/slack/beams_chat.go
 new file mode 100644
-index 00000000000..26e03e88efa
+index 00000000000..a1dfb1e6746
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat.go
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,347 @@
 +package slack
 +
 +import (
@@ -1834,10 +1914,12 @@ index 00000000000..26e03e88efa
 +	PublicAddr string
 +}
 +
-+// chatMessage is one turn of a chat thread.
++// chatMessage is one turn of a chat thread. Images go to the model with the
++// message but are not kept in the thread's history.
 +type chatMessage struct {
-+	Role    string `json:"role"`
-+	Content string `json:"content"`
++	Role    string       `json:"role"`
++	Content string       `json:"content"`
++	Images  []attachment `json:"-"`
 +}
 +
 +func (r BeamsCommandRunner) chatEnabled() bool {
@@ -1855,9 +1937,9 @@ index 00000000000..26e03e88efa
 +// chatTurn answers a request in a chat thread. It returns handoff when the
 +// request needs a coding agent in a beam instead, along with the earlier
 +// conversation so the agent has context.
-+func (s beamsSession) chatTurn(ctx context.Context, historyPath, agent, text string) (reply string, handoff bool, history []chatMessage, err error) {
++func (s beamsSession) chatTurn(ctx context.Context, historyPath, agent, text string, images []attachment) (reply string, handoff bool, history []chatMessage, err error) {
 +	history = readChatHistory(historyPath)
-+	messages := append(append([]chatMessage{}, history...), chatMessage{Role: "user", Content: text})
++	messages := append(append([]chatMessage{}, history...), chatMessage{Role: "user", Content: text, Images: images})
 +
 +	chat := s.runner.Chat
 +	if chat == nil {
@@ -1872,11 +1954,15 @@ index 00000000000..26e03e88efa
 +		return "", true, history, nil
 +	}
 +
-+	messages = append(messages, chatMessage{Role: "assistant", Content: reply})
-+	if len(messages) > chatHistoryLimit {
-+		messages = messages[len(messages)-chatHistoryLimit:]
++	// Keep only a note of the images in the history.
++	updated := append(append([]chatMessage{}, history...),
++		chatMessage{Role: "user", Content: describeAttachments(text, images)},
++		chatMessage{Role: "assistant", Content: reply},
++	)
++	if len(updated) > chatHistoryLimit {
++		updated = updated[len(updated)-chatHistoryLimit:]
 +	}
-+	if err := writeChatHistory(historyPath, messages); err != nil {
++	if err := writeChatHistory(historyPath, updated); err != nil {
 +		return "", false, history, trace.Wrap(err)
 +	}
 +	return reply, false, history, nil
@@ -1990,11 +2076,27 @@ index 00000000000..26e03e88efa
 +
 +// anthropicChat calls the Messages API. Teleport replaces the API key.
 +func anthropicChat(ctx context.Context, client *http.Client, baseURL, model, system string, messages []chatMessage) (string, error) {
++	var payload []map[string]any
++	for _, m := range messages {
++		if len(m.Images) == 0 {
++			payload = append(payload, map[string]any{"role": m.Role, "content": m.Content})
++			continue
++		}
++		var content []map[string]any
++		for _, img := range m.Images {
++			content = append(content, map[string]any{
++				"type":   "image",
++				"source": map[string]any{"type": "base64", "media_type": img.MimeType, "data": img.base64()},
++			})
++		}
++		content = append(content, map[string]any{"type": "text", "text": m.Content})
++		payload = append(payload, map[string]any{"role": m.Role, "content": content})
++	}
 +	body := map[string]any{
 +		"model":      model,
 +		"max_tokens": chatMaxTokens,
 +		"system":     system,
-+		"messages":   messages,
++		"messages":   payload,
 +	}
 +	headers := map[string]string{"x-api-key": "teleport", "anthropic-version": "2023-06-01"}
 +	var resp struct {
@@ -2019,10 +2121,25 @@ index 00000000000..26e03e88efa
 +// for every model (Bedrock-hosted OpenAI models are not available on Chat
 +// Completions). Teleport replaces the API key.
 +func openAIChat(ctx context.Context, client *http.Client, baseURL, model, system string, messages []chatMessage) (string, error) {
++	var input []map[string]any
++	for _, m := range messages {
++		if len(m.Images) == 0 {
++			input = append(input, map[string]any{"role": m.Role, "content": m.Content})
++			continue
++		}
++		content := []map[string]any{{"type": "input_text", "text": m.Content}}
++		for _, img := range m.Images {
++			content = append(content, map[string]any{
++				"type":      "input_image",
++				"image_url": "data:" + img.MimeType + ";base64," + img.base64(),
++			})
++		}
++		input = append(input, map[string]any{"role": m.Role, "content": content})
++	}
 +	body := map[string]any{
 +		"model":        model,
 +		"instructions": system,
-+		"input":        messages,
++		"input":        input,
 +		// Reasoning models spend part of this budget thinking.
 +		"max_output_tokens": chatMaxReasoningTokens,
 +		"store":             false,
@@ -2092,10 +2209,10 @@ index 00000000000..26e03e88efa
 +}
 diff --git a/integrations/access/slack/beams_chat_test.go b/integrations/access/slack/beams_chat_test.go
 new file mode 100644
-index 00000000000..551c3ccdb9b
+index 00000000000..3903d93e9ba
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat_test.go
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,333 @@
 +package slack
 +
 +import (
@@ -2105,6 +2222,7 @@ index 00000000000..551c3ccdb9b
 +	"net/http"
 +	"net/http/httptest"
 +	"os"
++	"path/filepath"
 +	"strings"
 +	"sync"
 +	"testing"
@@ -2328,6 +2446,105 @@ index 00000000000..551c3ccdb9b
 +	app.handleMessage(t.Context(), event, "make the title bigger")
 +	require.Equal(t, beamWorkReply, bot.replies[0])
 +	require.Len(t, bot.replies, 2)
++}
++
++func TestChatImages(t *testing.T) {
++	png := attachment{Name: "a.png", MimeType: "image/png", Data: []byte("x")}
++	images, ok := chatImages([]attachment{png})
++	require.True(t, ok)
++	require.Len(t, images, 1)
++
++	_, ok = chatImages([]attachment{{Name: "notes.txt", MimeType: "text/plain"}})
++	require.False(t, ok, "other file types need a beam")
++	_, ok = chatImages([]attachment{{Name: "big.png", MimeType: "image/png", Data: make([]byte, maxChatImageSize+1)}})
++	require.False(t, ok, "large images need a beam")
++	_, ok = chatImages([]attachment{png, png, png})
++	require.False(t, ok, "too many images need a beam")
++	images, ok = chatImages(nil)
++	require.True(t, ok)
++	require.Empty(t, images)
++}
++
++func TestChatImagePayloads(t *testing.T) {
++	img := attachment{Name: "dog.png", MimeType: "image/png", Data: []byte("png-bytes")}
++	messages := []chatMessage{{Role: "user", Content: "what is this?", Images: []attachment{img}}}
++
++	anthropic := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var body struct {
++			Messages []struct {
++				Content []map[string]any `json:"content"`
++			} `json:"messages"`
++		}
++		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
++		content := body.Messages[0].Content
++		require.Equal(t, "image", content[0]["type"])
++		require.Equal(t, map[string]any{"type": "base64", "media_type": "image/png", "data": img.base64()}, content[0]["source"])
++		require.Equal(t, map[string]any{"type": "text", "text": "what is this?"}, content[1])
++		io.WriteString(w, `{"content":[{"type":"text","text":"A dog."}]}`)
++	}))
++	defer anthropic.Close()
++	out, err := anthropicChat(t.Context(), anthropic.Client(), anthropic.URL, "m", "", messages)
++	require.NoError(t, err)
++	require.Equal(t, "A dog.", out)
++
++	openai := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		var body struct {
++			Input []struct {
++				Content []map[string]any `json:"content"`
++			} `json:"input"`
++		}
++		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
++		content := body.Input[0].Content
++		require.Equal(t, map[string]any{"type": "input_text", "text": "what is this?"}, content[0])
++		require.Equal(t, map[string]any{"type": "input_image", "image_url": "data:image/png;base64," + img.base64()}, content[1])
++		io.WriteString(w, `{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"A dog."}]}]}`)
++	}))
++	defer openai.Close()
++	out, err = openAIChat(t.Context(), openai.Client(), openai.URL, "m", "", messages)
++	require.NoError(t, err)
++	require.Equal(t, "A dog.", out)
++}
++
++func TestBotUsesAttachments(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	chat := &fakeChat{}
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++		Chat:         chat.chat,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++
++	// An image goes to the model with the question; history keeps a note.
++	img := attachment{Name: "dog.png", MimeType: "image/png", Data: []byte("png")}
++	thread := "C1-1700000000.004000"
++	out, err := runner.Ask(withAttachments(ctx, []attachment{img}), "T1", "UALICE", thread, "tell me about this image")
++	require.NoError(t, err)
++	require.Equal(t, "Try the pho place.", out)
++	last := chat.calls[0].messages[len(chat.calls[0].messages)-1]
++	require.Equal(t, []attachment{img}, last.Images)
++	profile := filepath.Join(runner.Config.ProfilesDir, "T1", "UALICE", "threads")
++	history := readChatHistory(chatHistoryPath(profile, thread))
++	require.Equal(t, "tell me about this image\n[attached dog.png]", history[0].Content)
++	require.Empty(t, history[0].Images)
++
++	// Other files go to a beam: copied in, with their path in the prompt.
++	notes := attachment{Name: "my notes.txt", MimeType: "text/plain", Data: []byte("todo")}
++	_, err = runner.Ask(withAttachments(ctx, []attachment{notes}), "T1", "UALICE", "C1-1700000000.004100", "summarize these notes")
++	require.NoError(t, err)
++	require.Len(t, chat.calls, 1, "non-image files skip chat")
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), "beams exec mine mkdir -p /tmp/slack-attachments")
++	require.Regexp(t, `beams scp \S+/upload-\d+ mine:/tmp/slack-attachments/my_notes.txt`, string(calls))
++	require.Contains(t, string(calls), "- /tmp/slack-attachments/my_notes.txt")
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
@@ -3312,8 +3529,128 @@ index 00000000000..304bc30ad28
 +	require.NoError(t, err)
 +	require.Equal(t, "3\n", string(attempts))
 +}
+diff --git a/integrations/access/slack/beams_files.go b/integrations/access/slack/beams_files.go
+new file mode 100644
+index 00000000000..13eb8f29840
+--- /dev/null
++++ b/integrations/access/slack/beams_files.go
+@@ -0,0 +1,114 @@
++package slack
++
++import (
++	"context"
++	"encoding/base64"
++	"fmt"
++	"os"
++	"path/filepath"
++	"regexp"
++	"strings"
++
++	"github.com/gravitational/trace"
++)
++
++const (
++	// maxChatImages and maxChatImageSize keep a chat request with images under
++	// Teleport's 10 MiB limit for proxied model requests once base64-encoded.
++	maxChatImages    = 2
++	maxChatImageSize = 3500 << 10
++	// beamUploadDir is where attachments are copied in a beam.
++	beamUploadDir = "/tmp/slack-attachments"
++)
++
++// chatImageTypes are the image formats both model APIs accept.
++var chatImageTypes = map[string]bool{"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true}
++
++var unsafeFileChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
++
++// attachment is a file from a Slack message.
++type attachment struct {
++	Name     string
++	MimeType string
++	Data     []byte
++}
++
++type attachmentsKey struct{}
++
++// withAttachments attaches a message's downloaded files to the request.
++func withAttachments(ctx context.Context, files []attachment) context.Context {
++	return context.WithValue(ctx, attachmentsKey{}, files)
++}
++
++func attachmentsFrom(ctx context.Context) []attachment {
++	files, _ := ctx.Value(attachmentsKey{}).([]attachment)
++	return files
++}
++
++// chatImages returns the attachments a chat answer can include, and whether
++// every attachment fits. Anything else (other file types, large or many
++// images) needs a coding agent in a beam.
++func chatImages(files []attachment) (images []attachment, allFit bool) {
++	for _, f := range files {
++		if !chatImageTypes[f.MimeType] || len(f.Data) > maxChatImageSize || len(images) == maxChatImages {
++			return nil, false
++		}
++		images = append(images, f)
++	}
++	return images, true
++}
++
++// base64 encodes an attachment for the model APIs.
++func (a attachment) base64() string {
++	return base64.StdEncoding.EncodeToString(a.Data)
++}
++
++// describeAttachments notes attachments in text kept for chat history.
++func describeAttachments(text string, files []attachment) string {
++	for _, f := range files {
++		text += fmt.Sprintf("\n[attached %s]", f.Name)
++	}
++	return text
++}
++
++// uploadAttachments copies the request's attachments into the beam as the
++// user and returns their paths there.
++func (s beamsSession) uploadAttachments(ctx context.Context, beam string, files []attachment) ([]string, error) {
++	var paths []string
++	for _, f := range files {
++		name := unsafeFileChars.ReplaceAllString(filepath.Base(f.Name), "_")
++		if name == "" || name == "." || name == ".." {
++			name = "attachment"
++		}
++		local, err := os.CreateTemp(s.profileDir, "upload-*")
++		if err != nil {
++			return nil, trace.Wrap(err)
++		}
++		_, writeErr := local.Write(f.Data)
++		closeErr := local.Close()
++		if err := trace.NewAggregate(writeErr, closeErr); err != nil {
++			os.Remove(local.Name())
++			return nil, trace.Wrap(err)
++		}
++		remote := beamUploadDir + "/" + name
++		// tsh beams scp does not create directories, so make one first.
++		_, err = s.userTSH(ctx, "beams", "exec", beam, "mkdir -p "+beamUploadDir)
++		if err == nil {
++			_, err = s.userTSH(ctx, "beams", "scp", local.Name(), beam+":"+remote)
++		}
++		os.Remove(local.Name())
++		if err != nil {
++			return nil, trace.Wrap(err, "copying %s into beam %q", f.Name, beam)
++		}
++		paths = append(paths, remote)
++	}
++	return paths, nil
++}
++
++// attachmentPrompt tells the coding agent where the user's files are.
++func attachmentPrompt(paths []string) string {
++	if len(paths) == 0 {
++		return ""
++	}
++	return "The user attached these files, now in this runtime:\n- " + strings.Join(paths, "\n- ") + "\n"
++}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
-index d0abf811e9a..4f337aa8a1c 100644
+index d0abf811e9a..de1c4aca533 100644
 --- a/integrations/access/slack/bot.go
 +++ b/integrations/access/slack/bot.go
 @@ -19,11 +19,15 @@
@@ -3332,15 +3669,27 @@ index d0abf811e9a..4f337aa8a1c 100644
  	"time"
  
  	"github.com/go-resty/resty/v2"
-@@ -62,6 +66,7 @@ type Bot struct {
+@@ -35,6 +39,7 @@ import (
+ 	appAccesslist "github.com/gravitational/teleport/integrations/access/accesslist"
+ 	"github.com/gravitational/teleport/integrations/access/accessrequest"
+ 	"github.com/gravitational/teleport/integrations/access/common"
++	"github.com/gravitational/teleport/integrations/access/common/auth"
+ 	"github.com/gravitational/teleport/integrations/lib"
+ 	"github.com/gravitational/teleport/integrations/lib/logger"
+ 	pd "github.com/gravitational/teleport/integrations/lib/plugindata"
+@@ -62,7 +67,11 @@ type Bot struct {
  	webProxyURL *url.URL
  	// reviewConfig is the configuration for native review.
  	reviewConfig ReviewConfig
 +	beamsConfig  BeamsConfig
  	clock        clockwork.Clock
++	// botToken provides the bot token for requests outside the Slack API
++	// client, such as file downloads.
++	botToken auth.AccessTokenProvider
  }
  
-@@ -110,6 +115,9 @@ func (b Bot) SupportedApps() []common.App {
+ // onAfterResponseSlack resty error function for Slack
+@@ -110,6 +119,9 @@ func (b Bot) SupportedApps() []common.App {
  	if b.reviewConfig.Enabled {
  		apps = append(apps, NewReviewApp(b.reviewConfig))
  	}
@@ -3350,7 +3699,7 @@ index d0abf811e9a..4f337aa8a1c 100644
  	return apps
  }
  
-@@ -235,6 +243,57 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
+@@ -235,6 +247,108 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
  	return trace.Wrap(err)
  }
  
@@ -3388,6 +3737,57 @@ index d0abf811e9a..4f337aa8a1c 100644
 +		return trace.Errorf("Slack response URL returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
 +	}
 +	return nil
++}
++
++// slackFileHosts are the hosts Slack serves message attachments from. The bot
++// token is only ever sent to these.
++var slackFileHosts = map[string]bool{"files.slack.com": true, "files-origin.slack.com": true}
++
++// DownloadSlackFile fetches a message attachment with the bot token, which
++// needs the files:read scope. It reads at most limit bytes.
++func (b Bot) DownloadSlackFile(ctx context.Context, fileURL string, limit int64) ([]byte, error) {
++	u, err := url.Parse(fileURL)
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++	if u.Scheme != "https" || !slackFileHosts[u.Hostname()] {
++		return nil, trace.BadParameter("refusing to download a file from %q", u.Hostname())
++	}
++	if b.botToken == nil {
++		return nil, trace.BadParameter("no Slack bot token")
++	}
++	token, err := b.botToken.GetAccessToken()
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++	req.Header.Set("Authorization", "Bearer "+token)
++	// The Slack API client's response hooks expect JSON, so use its plain
++	// HTTP client for file downloads.
++	resp, err := b.client.GetClient().Do(req)
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++	body := resp.Body
++	defer body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return nil, trace.Errorf("Slack returned %s for the file", resp.Status)
++	}
++	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/html") {
++		// Slack answers with its login page when the token lacks files:read.
++		return nil, trace.AccessDenied("Slack did not return the file; the app needs the files:read scope")
++	}
++	data, err := io.ReadAll(io.LimitReader(body, limit+1))
++	if err != nil {
++		return nil, trace.Wrap(err)
++	}
++	if int64(len(data)) > limit {
++		return nil, trace.LimitExceeded("file is larger than %d bytes", limit)
++	}
++	return data, nil
 +}
 +
 +// TeleportClusterName returns the name of the Teleport cluster the plugin
@@ -3461,7 +3861,7 @@ index a8ecf146bf6..bd8486f3636 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..320c95047f0 100644
+index e27fd004c15..053187a8893 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -3562,11 +3962,12 @@ index e27fd004c15..320c95047f0 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +272,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +272,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,
 +		beamsConfig:  c.Beams,
++		botToken:     c.AccessTokenProvider,
  		clock:        c.Clock,
  	}, nil
  }
@@ -3685,7 +4086,7 @@ index 60e14372f32..272b546b498 100644
  			name:    "malformed payload; skip",
  			payload: malformedPayload,
 diff --git a/integrations/access/slack/types.go b/integrations/access/slack/types.go
-index cfac4452c25..bb388483725 100644
+index cfac4452c25..5ddf952936f 100644
 --- a/integrations/access/slack/types.go
 +++ b/integrations/access/slack/types.go
 @@ -30,6 +30,8 @@ const (
@@ -3708,7 +4109,7 @@ index cfac4452c25..bb388483725 100644
  	default:
  		err = trace.BadParameter("unsupported interaction event type %q", interactionType.Type)
  	}
-@@ -156,6 +162,78 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
+@@ -156,6 +162,90 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
  	return interaction, nil
  }
  
@@ -3725,6 +4126,16 @@ index cfac4452c25..bb388483725 100644
 +	ChannelType string
 +	TS          string
 +	ThreadTS    string
++	Files       []SlackFile
++}
++
++// SlackFile is a file attached to a Slack message.
++type SlackFile struct {
++	ID         string `json:"id"`
++	Name       string `json:"name"`
++	Mimetype   string `json:"mimetype"`
++	Size       int64  `json:"size"`
++	URLPrivate string `json:"url_private"`
 +}
 +
 +func (BeamsMessageEvent) Type() InteractionEventType {
@@ -3736,15 +4147,16 @@ index cfac4452c25..bb388483725 100644
 +	var payload struct {
 +		TeamID string `json:"team_id"`
 +		Event  struct {
-+			Type        string `json:"type"`
-+			User        string `json:"user"`
-+			BotID       string `json:"bot_id"`
-+			Subtype     string `json:"subtype"`
-+			Text        string `json:"text"`
-+			Channel     string `json:"channel"`
-+			ChannelType string `json:"channel_type"`
-+			TS          string `json:"ts"`
-+			ThreadTS    string `json:"thread_ts"`
++			Type        string      `json:"type"`
++			User        string      `json:"user"`
++			BotID       string      `json:"bot_id"`
++			Subtype     string      `json:"subtype"`
++			Text        string      `json:"text"`
++			Channel     string      `json:"channel"`
++			ChannelType string      `json:"channel_type"`
++			TS          string      `json:"ts"`
++			ThreadTS    string      `json:"thread_ts"`
++			Files       []SlackFile `json:"files"`
 +		} `json:"event"`
 +	}
 +	if err := json.Unmarshal(data, &payload); err != nil {
@@ -3762,6 +4174,7 @@ index cfac4452c25..bb388483725 100644
 +		ChannelType: e.ChannelType,
 +		TS:          e.TS,
 +		ThreadTS:    e.ThreadTS,
++		Files:       e.Files,
 +	}, nil
 +}
 +
