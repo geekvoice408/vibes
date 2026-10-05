@@ -60,6 +60,9 @@ Here's what you can do, right in Slack:
   in the thread keep the conversation going. Requests that need a computer,
   like writing code or building a page, go to a beam automatically. Every
   request is recorded in Teleport's audit log under your name.
+
+  <img src="assets/screenshots/bot-chat-answer.png" alt="Asked what to have for lunch, Teleport Beams Bot says 'Just a moment while I look into this.' and then answers with lunch ideas, without starting a beam" width="560">
+
 - **Keep going in the same thread** to make changes, like "make the title
   bigger."
 - **Share what you made.** Ask the bot to publish it and you get a link you can
