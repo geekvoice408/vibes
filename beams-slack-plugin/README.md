@@ -9,8 +9,12 @@ make a webpage about things to do in Seattle and publish it").
 It is Teleport's Slack access plugin with a Beams app added. It is built from
 the Teleport `v18.11.1` source (the newest public v18.11 tag) and ships with
 `tsh` 18.11.3; the `tbot` sidecar runs 18.11.3 too. See
-[Versions](#versions). It runs as a container next to `tbot`, talks to Slack over Socket Mode,
-and needs no inbound ports or public URL.
+[Versions](#versions). It runs as a container next to `tbot`, talks to Slack
+over Socket Mode, and needs no inbound ports or public URL.
+
+**[Usage](#usage)** · **[Installation](#installation)** ·
+**[Deploy with Terraform](#deploy-with-terraform)** ·
+**[Development](#development)**
 
 ## What it does
 
@@ -187,7 +191,7 @@ separate from everyone else's. `/beams disconnect` forgets the session.
 
 The plugin never creates or touches beams as its own bot identity.
 
-## Setup
+## Installation
 
 ### 1. Teleport
 
