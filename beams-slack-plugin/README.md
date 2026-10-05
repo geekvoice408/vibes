@@ -208,7 +208,7 @@ replies:
 > 2. Run `/beams connect <session-id>` with the ID it prints.
 
 With slash commands the prompt is a reply only you can see. This is how it
-looks (from before `--user` was added; the tenant name is hidden):
+looks (the tenant name and email are hidden):
 
 <img src="assets/screenshots/beams-connect-prompt.png" alt="The plugin's private reply asking the user to run tsh delegation create-session and then /beams connect" width="720">
 
