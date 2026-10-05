@@ -4094,7 +4094,7 @@ index 00000000000..33be7d765f3
 +}
 diff --git a/integrations/access/slack/beams_demo.go b/integrations/access/slack/beams_demo.go
 new file mode 100644
-index 00000000000..cd8c6c517c0
+index 00000000000..52781e561ec
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo.go
 @@ -0,0 +1,364 @@
@@ -4363,7 +4363,7 @@ index 00000000000..cd8c6c517c0
 +	if err != nil {
 +		logger.Get(ctx).WarnContext(ctx, "Failed to remember the service owner for this thread", "error", err)
 +	}
-+	return fmt.Sprintf("Sent %s a direct message: “%s”", owner.label(), demoIssueMessage)
++	return fmt.Sprintf("Sent the service owner a direct message: “%s”", demoIssueMessage)
 +}
 +
 +// demoTellOwnerResolved tells the owner told about the issue in this thread
@@ -4384,7 +4384,7 @@ index 00000000000..cd8c6c517c0
 +		return fmt.Sprintf("I couldn't tell %s it's resolved: %s", owner.label(), trace.UserMessage(err))
 +	}
 +	s.logRequest(ctx, "tell", message, "to_slack_user_id", owner.ID)
-+	return fmt.Sprintf("Let %s know it's resolved, and why it was down.", owner.label())
++	return "Let the service owner know it's resolved, and why it was down."
 +}
 +
 +// demoRecipient finds who to message in Slack: the person named, or the
@@ -4464,7 +4464,7 @@ index 00000000000..cd8c6c517c0
 +}
 diff --git a/integrations/access/slack/beams_demo_test.go b/integrations/access/slack/beams_demo_test.go
 new file mode 100644
-index 00000000000..a6eb0f35e9c
+index 00000000000..d906f46db9a
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo_test.go
 @@ -0,0 +1,154 @@
@@ -4534,7 +4534,7 @@ index 00000000000..a6eb0f35e9c
 +
 +	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "the live website is down, notify the service owner there is an issue with their website")
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Sent Paul Hall a direct message: “There's an issue with the live website.”")
++	require.Contains(t, out, "Sent the service owner a direct message: “There's an issue with the live website.”")
 +	require.Equal(t, []string{"UPAUL  There's an issue with the live website."}, slack.posts)
 +	require.Contains(t, out, "Found the `livewebsite` app in Teleport, labeled `hosted-on: phall-test`")
 +	require.Contains(t, out, "From your beam `mine`, I connected to `phall-test` through Teleport as `root` and checked nginx: it's *inactive*")
@@ -4545,7 +4545,7 @@ index 00000000000..a6eb0f35e9c
 +	require.NoError(t, err)
 +	require.Contains(t, out, "Started nginx on `phall-test`, and it's *active*")
 +	require.Contains(t, out, "HTTP 200")
-+	require.Contains(t, out, "Let Paul Hall know it's resolved, and why it was down.")
++	require.Contains(t, out, "Let the service owner know it's resolved, and why it was down.")
 +	require.Len(t, slack.posts, 2)
 +	require.Equal(t, "UPAUL  The issue was resolved. The live website was down because nginx had stopped on `phall-test` (it was *inactive*). I started nginx, and the site answers again.", slack.posts[1])
 +	calls, err := os.ReadFile(logPath)
@@ -4614,7 +4614,7 @@ index 00000000000..a6eb0f35e9c
 +	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "livewebsite is down create a zendesk ticket and tell Paul that site is down, fix it please")
 +	require.NoError(t, err)
 +	require.Contains(t, out, "Zendesk ticket #")
-+	require.Contains(t, out, "Sent Paul Hall a direct message")
++	require.Contains(t, out, "Sent the service owner a direct message")
 +	require.Equal(t, []string{"UPAUL  There's an issue with the live website."}, slack.posts)
 +
 +	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "yes")
