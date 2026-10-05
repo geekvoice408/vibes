@@ -52,7 +52,8 @@ Here's what you can do, right in Slack:
 - **Share what you made.** Ask Scotty to publish it and you get a link you can
   open after signing in to Teleport.
 - **See your beams** by asking "how many beams do I have?"
-- **Start fresh** by asking for a new beam.
+- **Start fresh** by asking for a new beam, and **clean up** by asking Scotty
+  to "delete curious-shield" (or "delete this beam" in its thread).
 - **Pick your assistant.** Scotty uses Claude Code unless you say "use codex"
   (or "use claude" to switch back).
 
@@ -91,7 +92,8 @@ Learn more in the [Teleport Beams docs](https://goteleport.com/docs/beams/).
 - `exec` runs over SSH as a single shell string, so quote commands that use
   `&&`, pipes, or redirects: `/beams exec crisp-array "cd /app && make"`.
   Other commands are split into words like a shell, so wrap any argument
-  that contains an apostrophe in double quotes.
+  that contains an apostrophe in double quotes. Beam names pasted from Slack
+  code formatting (with backticks) work as is.
 - `claude` and `codex` run a coding agent in the beam and post its answer:
   Claude Code (`claude -p`) or Codex (`codex exec`). Both come preinstalled
   and preconfigured in every beam. Each run has a 15 minute limit, and
@@ -156,7 +158,12 @@ Asking for another beam creates one, and the rest of that thread works in it:
 
 <img src="assets/screenshots/scotty-create-beam.png" alt="Scotty creates a new beam on request" width="560">
 
-Scotty cannot delete beams; use `/beams rm`.
+To delete beams, tell Scotty "delete" followed by their names (for example
+"delete curious-shield and mint-arc"), or "delete this beam" in the beam's
+thread. Scotty handles this itself rather than asking the coding agent, and
+only when the beam names come right after the word "delete" or "remove", so a
+request like "remove the header from the page in mint-arc" is still sent to
+the agent. You can also use `/beams rm <name>`.
 
 Scotty is an engineer, not a transporter operator, so don't ask him for a
 lift.

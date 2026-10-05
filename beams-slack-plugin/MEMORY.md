@@ -210,6 +210,14 @@ static `beamsIntro`, a summary of https://goteleport.com/docs/beams/ framed
 around this bot's commands, the same instant way (`isInstantRequest`). Update
 it if the Beams docs (limits, features) change.
 
+Deleting: `removeTargets` treats a request as a delete only when beam names
+(or "beam"/"this"/"it") directly follow delete/remove/rm/destroy/"get rid
+of"; the plugin then runs `tsh beams rm` itself (no agent) and clears the
+thread's beam if deleted. Slash and Scotty arguments have Slack code
+backticks trimmed (`trimSlackCode`); pasting a code-formatted beam name used
+to fail with "does not exist". `cleanTSHError` drops tsh's "cannot relogin in
+non-interactive session" line.
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text

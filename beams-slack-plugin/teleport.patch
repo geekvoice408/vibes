@@ -478,10 +478,10 @@ index 00000000000..de8abc00554
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..819cef238c4
+index 00000000000..e754ab81fd7
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,676 @@
+@@ -0,0 +1,698 @@
 +package slack
 +
 +import (
@@ -925,7 +925,7 @@ index 00000000000..819cef238c4
 +	var outBuf, errBuf bytes.Buffer
 +	cmd.Stdout, cmd.Stderr = &outBuf, &errBuf
 +	if err := cmd.Run(); err != nil {
-+		stderr = stripANSI(strings.TrimSpace(errBuf.String()))
++		stderr = cleanTSHError(errBuf.String())
 +		if runCtx.Err() != nil {
 +			return "", stderr, trace.LimitExceeded("command timed out")
 +		}
@@ -975,7 +975,16 @@ index 00000000000..819cef238c4
 +	if err != nil {
 +		return nil, trace.BadParameter("couldn't read the command (%v); wrap arguments that contain quotes or apostrophes in double quotes", err)
 +	}
++	for i, word := range words {
++		words[i] = trimSlackCode(word)
++	}
 +	return words, nil
++}
++
++// trimSlackCode removes the backticks Slack keeps when a user pastes text
++// that was shown as code, such as a beam name copied from a reply.
++func trimSlackCode(word string) string {
++	return strings.Trim(word, "`")
 +}
 +
 +// agentWords splits "<agent> <name> [--continue|-c] <prompt...>", keeping the
@@ -991,7 +1000,7 @@ index 00000000000..819cef238c4
 +		if len(words) == 2 && word != "--continue" && word != "-c" {
 +			break
 +		}
-+		words = append(words, word)
++		words = append(words, trimSlackCode(word))
 +		rest = strings.TrimSpace(after)
 +	}
 +	if len(rest) >= 2 && (rest[0] == '"' || rest[0] == '\'') && rest[len(rest)-1] == rest[0] {
@@ -1010,6 +1019,19 @@ index 00000000000..819cef238c4
 +		return output
 +	}
 +	return "```" + output + "```"
++}
++
++// cleanTSHError drops tsh's "cannot relogin" line, which accompanies every
++// failure when tsh cannot prompt and hides the real error.
++func cleanTSHError(stderr string) string {
++	var lines []string
++	for _, line := range strings.Split(stripANSI(stderr), "\n") {
++		if strings.Contains(line, "cannot relogin in non-interactive session") {
++			continue
++		}
++		lines = append(lines, line)
++	}
++	return strings.TrimSpace(strings.Join(lines, "\n"))
 +}
 +
 +func stripANSI(s string) string {
@@ -1160,10 +1182,10 @@ index 00000000000..819cef238c4
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..100d9cdff3b
+index 00000000000..a1e3e1dc359
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,248 @@
 +package slack
 +
 +import (
@@ -1268,6 +1290,8 @@ index 00000000000..100d9cdff3b
 +		{text: "claude mine -c   don't stop", want: []string{"claude", "mine", "-c", "don't stop"}},
 +		{text: `claude mine --continue "fix it"`, want: []string{"claude", "mine", "--continue", "fix it"}},
 +		{text: "codex mine", want: []string{"codex", "mine"}},
++		{text: "rm `curious-shield`", want: []string{"rm", "curious-shield"}},
++		{text: "codex `mine` what's up", want: []string{"codex", "mine", "what's up"}},
 +		{text: `exec mine "cd /app && make"`, want: []string{"exec", "mine", "cd /app && make"}},
 +	} {
 +		got, err := parseCommand(tc.text)
@@ -1276,6 +1300,11 @@ index 00000000000..100d9cdff3b
 +	}
 +	_, err := parseCommand("exec mine echo don't")
 +	require.ErrorContains(t, err, "wrap arguments that contain quotes or apostrophes in double quotes")
++}
++
++func TestCleanTSHError(t *testing.T) {
++	stderr := "\x1b[31mERROR:\x1b[0m cannot relogin in non-interactive session\n\t\"beam\" \"x\" does not exist\n"
++	require.Equal(t, `"beam" "x" does not exist`, cleanTSHError(stderr))
 +}
 +
 +func TestCodeBlock(t *testing.T) {
@@ -1407,10 +1436,10 @@ index 00000000000..100d9cdff3b
 +}
 diff --git a/integrations/access/slack/beams_scotty.go b/integrations/access/slack/beams_scotty.go
 new file mode 100644
-index 00000000000..9f069fdeefa
+index 00000000000..05ff03172da
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty.go
-@@ -0,0 +1,472 @@
+@@ -0,0 +1,549 @@
 +package slack
 +
 +import (
@@ -1571,6 +1600,11 @@ index 00000000000..9f069fdeefa
 +	if err != nil {
 +		return "", trace.Wrap(err)
 +	}
++	threadPath := filepath.Join(threadsDir, threadKey)
++	thread := readThreadState(threadPath)
++	if names, ok := removeTargets(text, beams, thread.beam); ok {
++		return s.removeBeams(ctx, beams, names, thread, threadPath, notes)
++	}
 +	if isBeamsListQuestion(text) {
 +		threadPath := filepath.Join(threadsDir, threadKey)
 +		if _, err := os.Stat(threadPath); os.IsNotExist(err) {
@@ -1581,8 +1615,6 @@ index 00000000000..9f069fdeefa
 +		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now(), "You don't have any beams yet. Ask me to create one.")), "\n\n")), nil
 +	}
 +
-+	threadPath := filepath.Join(s.profileDir, "threads", threadKey)
-+	thread := readThreadState(threadPath)
 +	agent := thread.agent
 +	if requested := requestedAgent(text); requested != "" && requested != agent {
 +		agent = requested
@@ -1709,12 +1741,86 @@ index 00000000000..9f069fdeefa
 +}
 +
 +func writeThreadState(path string, state threadState) error {
++	if state.beam == "" {
++		// No beam yet: keep the file so replies still count as follow-ups.
++		return trace.Wrap(os.WriteFile(path, nil, 0o600))
++	}
 +	fields := []string{state.beam}
 +	if state.fresh {
 +		fields = append(fields, "new")
 +	}
 +	fields = append(fields, cmp.Or(state.agent, agentClaude))
 +	return trace.Wrap(os.WriteFile(path, []byte(strings.Join(fields, " ")), 0o600))
++}
++
++// removeVerb starts a request to delete beams.
++var removeVerb = regexp.MustCompile(`(?i)^\W*(?:please\s+)?(?:delete|remove|destroy|rm|tear\s+down|get\s+rid\s+of)\b`)
++
++// removeTargets reports whether a request asks to delete beams and which.
++// The beams must follow the verb directly ("delete curious-shield", "remove
++// beam a and b", "delete this beam"), so requests like "remove the header
++// from the page in curious-shield" still go to the coding agent. "this beam"
++// or "it" means the thread's beam. ok with no names means the user asked to
++// delete beams without saying which.
++func removeTargets(text string, beams []map[string]any, threadBeam string) (names []string, ok bool) {
++	loc := removeVerb.FindStringIndex(text)
++	if loc == nil {
++		return nil, false
++	}
++	known := map[string]bool{}
++	for _, beam := range beams {
++		if id, _ := beam["id"].(string); id != "" {
++			known[id] = true
++		}
++	}
++	thisBeam, beamWord := false, false
++	for _, word := range strings.Fields(text[loc[1]:]) {
++		word = strings.Trim(word, ",.!?;:`'\"*_")
++		switch lower := strings.ToLower(word); {
++		case known[word]:
++			names = append(names, word)
++		case lower == "this" || lower == "that" || lower == "it":
++			thisBeam = true
++		case lower == "beam":
++			beamWord = true
++			thisBeam = true
++		case lower == "beams":
++			beamWord = true
++		case lower == "the" || lower == "my" || lower == "and" || lower == "both" || lower == "please" || lower == "":
++		default:
++			if len(names) == 0 && !beamWord && !thisBeam {
++				return nil, false
++			}
++		}
++	}
++	if len(names) == 0 && thisBeam && threadBeam != "" && known[threadBeam] {
++		names = []string{threadBeam}
++	}
++	return names, len(names) > 0 || beamWord || thisBeam
++}
++
++// removeBeams deletes the named beams as the user and forgets the thread's
++// beam if it was one of them.
++func (s beamsSession) removeBeams(ctx context.Context, beams []map[string]any, names []string, thread threadState, threadPath string, notes []string) (string, error) {
++	if len(names) == 0 {
++		notes = append(notes, "Which beam should I delete? Say \"delete\" and its name.\n\n"+
++			formatBeamsList(beams, time.Now(), "You don't have any beams."))
++		return truncateSlackOutput(strings.Join(notes, "\n\n")), nil
++	}
++	for _, name := range names {
++		if _, err := s.target(ctx, []string{"rm", name}); err != nil {
++			notes = append(notes, fmt.Sprintf("Could not delete `%s`: %s", name, trace.UserMessage(err)))
++			continue
++		}
++		notes = append(notes, fmt.Sprintf("Deleted beam `%s`.", name))
++		if name == thread.beam {
++			thread.beam, thread.fresh = "", false
++		}
++	}
++	if err := writeThreadState(threadPath, thread); err != nil {
++		return "", trace.Wrap(err)
++	}
++	return truncateSlackOutput(strings.Join(notes, "\n\n")), nil
 +}
 +
 +// requestAuthorization saves the request for later and asks the user to let
@@ -1885,10 +1991,10 @@ index 00000000000..9f069fdeefa
 +}
 diff --git a/integrations/access/slack/beams_scotty_test.go b/integrations/access/slack/beams_scotty_test.go
 new file mode 100644
-index 00000000000..ed726e4a2a2
+index 00000000000..8d1b5b339e8
 --- /dev/null
 +++ b/integrations/access/slack/beams_scotty_test.go
-@@ -0,0 +1,381 @@
+@@ -0,0 +1,440 @@
 +package slack
 +
 +import (
@@ -2269,6 +2375,65 @@ index 00000000000..ed726e4a2a2
 +	require.NotContains(t, execs[2], "'--continue'", "switching agents starts a fresh conversation")
 +	require.Contains(t, execs[3], "'claude' '-p'")
 +	require.Contains(t, execs[3], "'--continue'")
++}
++
++func TestRemoveTargets(t *testing.T) {
++	beams := []map[string]any{{"id": "curious-shield"}, {"id": "mint-arc"}}
++	for _, tc := range []struct {
++		text   string
++		thread string
++		names  []string
++		ok     bool
++	}{
++		{text: "delete curious-shield", names: []string{"curious-shield"}, ok: true},
++		{text: "please remove beam `mint-arc`.", names: []string{"mint-arc"}, ok: true},
++		{text: "delete curious-shield and mint-arc", names: []string{"curious-shield", "mint-arc"}, ok: true},
++		{text: "delete this beam", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
++		{text: "get rid of it", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
++		{text: "delete my beams", ok: true},
++		{text: "delete this beam", ok: true},
++		{text: "remove the background from the page in mint-arc"},
++		{text: "make a page and delete the old one"},
++		{text: "delete nonexistent-beam"},
++	} {
++		names, ok := removeTargets(tc.text, beams, tc.thread)
++		require.Equal(t, tc.ok, ok, tc.text)
++		require.Equal(t, tc.names, names, tc.text)
++	}
++}
++
++func TestScottyRemovesBeams(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "scotty",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001000", "delete `mine`")
++	require.NoError(t, err)
++	require.Equal(t, "Deleted beam `mine`.", out)
++
++	out, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001100", "delete my beams")
++	require.NoError(t, err)
++	require.Contains(t, out, "Which beam should I delete?")
++	require.Contains(t, out, "`theirs`")
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.001200", "remove the background from the page in mine")
++	require.NoError(t, err)
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Equal(t, 1, strings.Count(string(calls), "beams rm "), "only the explicit delete removes a beam")
++	require.Contains(t, string(calls), "beams rm mine\n")
++	require.Contains(t, string(calls), "beams exec mine", "the page edit goes to the agent")
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
 index d0abf811e9a..b48a4703dd4 100644
