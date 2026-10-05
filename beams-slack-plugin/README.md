@@ -210,7 +210,11 @@ signed in is told to sign in once and retry.
 
 ### 2. Slack app
 
-Create or update a Slack app at <https://api.slack.com/apps>:
+The quickest way is to create the app from
+[`slack-app-manifest.yaml`](slack-app-manifest.yaml): at
+<https://api.slack.com/apps>, choose **Create New App → From a manifest**, pick
+your workspace, and paste the file. It sets up everything below except the
+app-level token and the icon. To configure an existing app by hand instead:
 
 - **Socket Mode**: on. Create an app-level token (`xapp-...`) with
   `connections:write`.
@@ -272,6 +276,10 @@ in a `.env` file next to `docker-compose.yml`.
 
 ### 4. Run it
 
+Run it with Docker Compose as below, or let Terraform deploy everything,
+including the Teleport bot and join token: see
+[Deploy with Terraform](#deploy-with-terraform).
+
 From a directory containing this repo's `docker-compose.yml`, `tbot.yaml`,
 your `config.toml`, and a `secrets/` directory:
 
@@ -325,6 +333,88 @@ Start from `config.toml.example`. The Beams settings:
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.
+
+## Deploy with Terraform
+
+[`terraform/`](terraform) deploys the whole stack in one apply:
+
+- **Teleport:** the `scotty` bot (roles `access-plugin`, Teleport's preset
+  role for access plugins, plus `beam-user`) and a `bound_keypair` join token
+  with a generated registration secret. Unlike a one-time join token, it isn't
+  used up, so later applies leave the running `tbot` alone, and `tbot` can
+  rejoin with its key after an outage.
+- **Docker:** the `tbot` and plugin containers and their volumes, on the local
+  Docker daemon or a remote one over SSH. The configs and Slack tokens are
+  copied into the containers as files, so the host needs no checkout.
+
+The Slack app and the plugin image stay manual: Slack has no Terraform
+provider for apps, and the image has to be built and pushed somewhere your
+Docker host can pull from.
+
+### Bootstrap
+
+1. **Slack app.** Create it from the manifest and set its icon ([Slack
+   app](#2-slack-app)). Install it to the workspace, then copy the **Bot User
+   OAuth Token** (`xoxb-…`, under **OAuth & Permissions**) and create an
+   app-level token (`xapp-…`) with `connections:write` under **Basic
+   Information → App-Level Tokens**.
+2. **Plugin image.** Build and push it ([Build and host the
+   image](#3-build-and-host-the-image)). Use an immutable tag such as
+   `sha-<commit>`, so Terraform deploys exactly that build.
+3. **Teleport credentials for Terraform.** Sign in as a Teleport user who can
+   create bots, roles and join tokens (for example with the `editor` role),
+   then let `tctl` mint short-lived credentials for the provider:
+
+   ```sh
+   tsh login --proxy=example-beams-tenant.beams.sh:443
+   eval "$(tctl terraform env)"
+   ```
+
+4. **Docker access.** Make sure `docker ps` works against the target host. For
+   a remote host, use SSH (`docker_host = "ssh://user@host"`); your SSH user
+   needs to be allowed to use Docker there.
+5. **Variables.** Copy the example and fill it in. The file is git-ignored.
+
+   ```sh
+   cd terraform
+   cp terraform.tfvars.example terraform.tfvars
+   ```
+
+   At minimum set `teleport_proxy`, `plugin_image`, `slack_bot_token`, and
+   `slack_app_token` (or pass the tokens as `TF_VAR_slack_bot_token` and
+   `TF_VAR_slack_app_token`). See `variables.tf` for the rest.
+6. **Apply.**
+
+   ```sh
+   terraform init
+   terraform apply
+   ```
+
+7. **Check it.** `tbot` should log "Identity initialized successfully" and the
+   plugin "Receiving Socket Mode events":
+
+   ```sh
+   docker logs beams-slack-tbot
+   docker logs beams-slack-plugin
+   ```
+
+   Then `/invite` the app to a channel and ask it "what can I do with beams?".
+
+Users still need a Teleport user named after their Slack email with the
+`beam-user` role, and they authorize the bot the first time they use it
+([Authorizing the plugin to act as you](#authorizing-the-plugin-to-act-as-you)).
+
+### Updating and secrets
+
+- **New plugin build:** push it, set `plugin_image` to the new tag, and
+  `terraform apply`. Only the plugin container is replaced.
+- **Rotating Slack tokens:** update the variables and apply; the plugin
+  container is recreated with the new files.
+- **State holds secrets.** The Slack tokens and the bot's registration secret
+  are in Terraform state, so keep state in an encrypted, access-controlled
+  backend rather than a shared or committed `terraform.tfstate`.
+- Destroying the stack deletes the volumes, including users' delegation
+  sessions; they will be asked to authorize the bot again.
 
 ## Development
 

@@ -1,0 +1,17 @@
+version: v2
+proxy_server: ${proxy}
+onboarding:
+  join_method: bound_keypair
+  token: ${token}
+  bound_keypair:
+    registration_secret: ${registration_secret}
+storage:
+  type: directory
+  path: /var/lib/tbot
+outputs:
+  # Identity file the plugin uses as teleport.identity and
+  # beams.plugin_identity.
+  - type: identity
+    destination:
+      type: directory
+      path: ${identity_dir}

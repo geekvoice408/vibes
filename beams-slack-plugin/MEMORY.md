@@ -30,6 +30,10 @@ beam); beam-list questions skip Claude.
 
 - Code and CI: <https://github.com/geekvoice408/vibes>, directory
   `beams-slack-plugin/`, branch `main`.
+- Mirrored to the PUBLIC repo `phall-teleport/stuff` (`beams-slack-plugin/`).
+  Its `MEMORY.md` is a redacted copy without hosts, Slack/Teleport
+  identifiers, or security notes. Sync README, code, and Terraform there, but
+  never copy this `MEMORY.md` over it; edit the public copy separately.
 - `teleport.patch` is the full diff against `gravitational/teleport`
   `v18.11.1`. CI clones Teleport at that tag, applies the patch, builds
   `teleport-slack`, bundles `tsh` 18.11.3, and pushes tags `latest`, `main`,
@@ -215,6 +219,21 @@ it if the Beams docs (limits, features) change.
   threads/<ch>-<ts>.pending  request waiting for the user to authorize Scotty
   identity-*           temp delegated identities, deleted after each command
 ```
+
+## Terraform
+
+`terraform/` deploys the stack: `teleport_bot` (default roles: preset
+`access-plugin`, which already has user/user_login_state read, plus
+`beam-user`), a `bound_keypair` `teleport_provision_token` with a
+`random_password` registration secret (`recovery.mode = relaxed`), and
+kreuzwerker/docker volumes plus `volume-init`, `tbot`, and plugin containers.
+Configs and Slack tokens are `upload`ed into the containers from
+`templates/*.tftpl` and variables, so state holds secrets. Provider creds:
+`eval "$(tctl terraform env)"` (temporary bot with the preset
+`terraform-provider` role). The Slack app comes from `slack-app-manifest.yaml`;
+the image is built and pushed by hand. `terraform validate` passes with
+teleport v18.11.3, kreuzwerker/docker v3.9.0, random v3.9.1. Not yet applied
+anywhere; ventura still uses Compose.
 
 ## Live deployment
 

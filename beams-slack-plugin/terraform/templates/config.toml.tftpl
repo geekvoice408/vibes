@@ -1,0 +1,31 @@
+[teleport]
+addr = "${proxy}"
+identity = "${identity_file}"
+refresh_identity = true
+
+[slack]
+token = "${secrets_dir}/slack-bot-token"
+
+[review]
+enabled = false
+# Socket Mode app-level token; read here even with review disabled.
+app_token = "${secrets_dir}/slack-app-token"
+
+[beams]
+enabled = true
+tsh_path = "/usr/local/bin/tsh"
+proxy = "${proxy}"
+plugin_identity = "${identity_file}"
+profiles_dir = "${profiles_dir}"
+bot_name = "${bot_name}"
+delegation_ttl = "${delegation_ttl}"
+required_role = "${required_role}"
+claude_timeout = "${agent_timeout}"
+codex_timeout = "${agent_timeout}"
+
+[role_to_recipients]
+"*" = ${access_request_recipients}
+
+[log]
+output = "stderr"
+severity = "${log_severity}"
