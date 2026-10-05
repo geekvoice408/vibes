@@ -208,6 +208,26 @@ models it serves. Claude chats use the Anthropic Messages API and Codex chats
 the OpenAI Responses API, the routes Teleport's model apps serve for every
 model. `disable_chat = true` turns chat answers off.
 
+### Telling people
+
+Ask the bot to pass something on, and it messages that person for you:
+
+> @Teleport Beams Bot there's an incident on the production webserver, tell
+> Anna the website is down and write a script to test connectivity
+
+- **Who:** use a name ("Anna", "Anna Mikhailova", or a Slack handle) or an
+  @-mention. The bot looks the name up in your Slack workspace
+  (`users:read`). If more than one person matches, or nobody does, it says so
+  and doesn't send anything; give a fuller name to pick one.
+- **Where:** in a channel thread, the bot posts the note in the thread and
+  @-mentions them ("@Anna message from @you: The production website is down.
+  We're on it."). In a direct message with the bot, it sends them a direct
+  message instead.
+- **When:** right away, before any work in a beam starts, so an incident
+  heads-up doesn't wait for the script. Claude or Codex writes the note from
+  what you asked to pass on, and adds that we're on it when it's about a
+  problem.
+
 ### Attachments
 
 Files attached to a message (or posted on their own in a bot thread) come
@@ -273,7 +293,7 @@ message `Beams bot request`:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `chat`, `beam`, `delete`, `list`, or `slash` |
+| `kind` | `chat`, `beam`, `tell`, `delete`, `list`, or `slash` |
 | `slack_team_id`, `slack_user_id` | Who asked, in Slack |
 | `teleport_user` | The Teleport user it ran as |
 | `request` | What they asked (up to 2,000 characters) |
@@ -281,6 +301,7 @@ message `Beams bot request`:
 | `app_session_id` | For chat: the Teleport app session, matching its `app.session.llm_request` events |
 | `beam`, `continued`, `attachments` | For beam work: the beam, whether the agent conversation continued, and attached file names |
 | `command`, `beams` | The slash command, or the beams deleted |
+| `to_slack_user_id` | For `tell`: who was messaged (`request` is the message) |
 
 `/beams connect` is not logged, so session IDs stay out of the logs. Set
 `omit_request_text = true` to log everything except the request text. Ship

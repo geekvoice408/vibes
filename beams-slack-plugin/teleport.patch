@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..8e523c0b256
+index 00000000000..6f5dd454125
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,356 @@
+@@ -0,0 +1,368 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -116,6 +116,8 @@ index 00000000000..8e523c0b256
 +	PostBeamsThreadReply(ctx context.Context, channelID, threadTS, text string) error
 +	TeleportClusterName() string
 +	DownloadSlackFile(ctx context.Context, fileURL string, limit int64) ([]byte, error)
++	BotUserID(ctx context.Context) (string, error)
++	FindSlackPeople(ctx context.Context, query string) ([]SlackPerson, error)
 +}
 +
 +type beamsRunner interface {
@@ -137,6 +139,9 @@ index 00000000000..8e523c0b256
 +	seen *recentSet
 +	// threads runs one bot request at a time per Slack thread.
 +	threads *threadQueue
++	// botUserID is the bot's Slack user, whose mentions are dropped from
++	// requests.
++	botUserID string
 +}
 +
 +// NewBeamsApp creates a Beams slash-command application.
@@ -172,6 +177,8 @@ index 00000000000..8e523c0b256
 +		Users:            baseApp.APIClient,
 +		Apps:             baseApp.APIClient,
 +		ClusterName:      a.bot.TeleportClusterName(),
++		FindPeople:       a.bot.FindSlackPeople,
++		Post:             a.bot.PostBeamsThreadReply,
 +	}
 +	return nil
 +}
@@ -203,6 +210,11 @@ index 00000000000..8e523c0b256
 +		cancel()
 +		return nil
 +	})
++	if id, err := a.bot.BotUserID(ctx); err != nil {
++		logger.Get(ctx).WarnContext(ctx, "Failed to look up the bot's Slack user, so requests can't mention people", "error", err)
++	} else {
++		a.botUserID = id
++	}
 +
 +	log := logger.Get(ctx)
 +	a.job.SetReady(true)
@@ -220,7 +232,7 @@ index 00000000000..8e523c0b256
 +				case BeamsMessageEvent:
 +					followUp := event.EventType == "message" && event.ThreadTS != "" &&
 +						a.runner.FollowsThread(event.TeamID, event.User, event.Channel+"-"+event.ThreadTS)
-+					if request, ok := botRequest(event, followUp); ok && a.seen.add(event.Channel+"-"+event.TS) {
++					if request, ok := botRequest(event, followUp, a.botUserID); ok && a.seen.add(event.Channel+"-"+event.TS) {
 +						go a.handleMessage(ctx, event, request)
 +					}
 +				}
@@ -439,10 +451,10 @@ index 00000000000..8e523c0b256
 +}
 diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
 new file mode 100644
-index 00000000000..ef5fe8bd3e1
+index 00000000000..04d961f7f88
 --- /dev/null
 +++ b/integrations/access/slack/beams_app_test.go
-@@ -0,0 +1,196 @@
+@@ -0,0 +1,201 @@
 +package slack
 +
 +import (
@@ -467,6 +479,11 @@ index 00000000000..ef5fe8bd3e1
 +func (b *fakeBeamsBot) PostBeamsReply(context.Context, string, string) error { return nil }
 +func (b *fakeBeamsBot) LookupEmailByUserID(context.Context, string) (string, error) {
 +	return "", nil
++}
++
++func (b *fakeBeamsBot) BotUserID(context.Context) (string, error) { return "UBOT", nil }
++func (b *fakeBeamsBot) FindSlackPeople(context.Context, string) ([]SlackPerson, error) {
++	return nil, nil
 +}
 +
 +func (b *fakeBeamsBot) PostBeamsThreadReply(_ context.Context, channel, threadTS, text string) error {
@@ -852,10 +869,10 @@ index 00000000000..6e3b0311358
 +}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..c7c31ae3524
+index 00000000000..ea3652a8e69
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,719 @@
+@@ -0,0 +1,751 @@
 +package slack
 +
 +import (
@@ -881,7 +898,7 @@ index 00000000000..c7c31ae3524
 +
 +var (
 +	sessionIDText = regexp.MustCompile(`[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}`)
-+	slackMention  = regexp.MustCompile(`<@[A-Z0-9]+>`)
++	slackMention  = regexp.MustCompile(`<@[A-Z0-9]+(?:\|[^>]*)?>`)
 +	botPrefix     = regexp.MustCompile(`(?i)^\s*@?teleport\s+beams\s+bot\b[\s,:]*`)
 +	safeThreadKey = regexp.MustCompile(`^[A-Z0-9]+-[0-9.]+$`)
 +
@@ -896,13 +913,21 @@ index 00000000000..c7c31ae3524
 +// bot. Mentions, direct messages, and replies in a thread the user already
 +// has with the bot (followUp) always count; other channel messages count only
 +// when they start with "Teleport Beams Bot".
-+func botRequest(event BeamsMessageEvent, followUp bool) (string, bool) {
++//
++// Mentions of the bot are dropped, but mentions of other people stay so a
++// request can say who to message. Without botUserID, all mentions are dropped.
++func botRequest(event BeamsMessageEvent, followUp bool, botUserID string) (string, bool) {
 +	// Uploads arrive as "file_share" messages; other subtypes are edits,
 +	// joins, bot posts, and the like.
 +	if event.User == "" || event.BotID != "" || (event.Subtype != "" && event.Subtype != "file_share") {
 +		return "", false
 +	}
-+	text := strings.TrimSpace(slackMention.ReplaceAllString(event.Text, ""))
++	text := strings.TrimSpace(slackMention.ReplaceAllStringFunc(event.Text, func(mention string) string {
++		if id := mentionID.FindStringSubmatch(mention); botUserID != "" && id[1] != botUserID {
++			return mention
++		}
++		return ""
++	}))
 +	switch {
 +	case event.EventType == "app_mention", event.ChannelType == "im", followUp:
 +		text = botPrefix.ReplaceAllString(text, "")
@@ -1082,10 +1107,12 @@ index 00000000000..c7c31ae3524
 +	// directly through Teleport's LLM app, as the user: quick, no beam, and
 +	// audited. The model hands off requests that need a computer.
 +	var chatHistory []chatMessage
++	// told tracks the Slack messages sent for the user during this request.
++	told := map[string]string{}
 +	files := attachmentsFrom(ctx)
 +	images, imagesFit := chatImages(files)
 +	if thread.beam == "" && r.chatEnabled() && !namesBeam(beams, text) && imagesFit {
-+		reply, handoff, history, err := s.chatTurn(ctx, chatHistoryPath(threadsDir, threadKey), agent, text, images)
++		reply, handoff, history, actions, err := s.chatTurn(ctx, chatHistoryPath(threadsDir, threadKey), agent, text, images)
 +		switch {
 +		case needsAuthorization(err):
 +			return s.requestAuthorization(channel, threadTS, text)
@@ -1094,17 +1121,29 @@ index 00000000000..c7c31ae3524
 +			logger.Get(ctx).WarnContext(ctx, "Chat is unavailable, using a coding agent in a beam instead", "error", err)
 +		case err != nil:
 +			return AskResult{}, trace.Wrap(err, "getting a chat answer from %s", agentDisplayName(agent))
-+		case !handoff:
-+			if err := writeThreadState(threadPath, threadState{agent: agent}); err != nil {
-+				return AskResult{}, trace.Wrap(err)
-+			}
-+			if beam, _ := chooseBeam(beams, "", ""); beam != "" {
-+				// After the answer is posted, so chat stays fast.
-+				go s.recordChatInBeam(context.WithoutCancel(ctx), beam, agent, text, reply)
-+			}
-+			return AskResult{Reply: truncateSlackOutput(strings.Join(append(notes, reply), "\n\n"))}, nil
 +		default:
++			// Messages for other people go out right away, before any beam work.
++			var tellNotes []string
++			for _, action := range actions {
++				if note := s.tell(ctx, channel, threadTS, action, told); note != "" {
++					tellNotes = append(tellNotes, note)
++				}
++			}
++			if !handoff {
++				if err := writeThreadState(threadPath, threadState{agent: agent}); err != nil {
++					return AskResult{}, trace.Wrap(err)
++				}
++				if beam, _ := chooseBeam(beams, "", ""); beam != "" {
++					// After the answer is posted, so chat stays fast.
++					go s.recordChatInBeam(context.WithoutCancel(ctx), beam, agent, text, reply)
++				}
++				parts := append(append(notes, reply), tellNotes...)
++				return AskResult{Reply: truncateSlackOutput(strings.Join(parts, "\n\n"))}, nil
++			}
 +			chatHistory = history
++			for _, note := range tellNotes {
++				reportProgress(ctx, note)
++			}
 +		}
 +	}
 +
@@ -1144,6 +1183,9 @@ index 00000000000..c7c31ae3524
 +		}
 +		request = text + "\n\n" + attachmentPrompt(paths)
 +	}
++	if sent := alreadyTold(told); sent != "" {
++		request += "\n\n" + sent
++	}
 +
 +	s.logRequest(ctx, "beam", text,
 +		"beam", name, "agent", agent, "continued", continued, "attachments", attachmentNames(files))
@@ -1168,6 +1210,12 @@ index 00000000000..c7c31ae3524
 +	reply, actions := parseBotActions(output)
 +	var actionNotes []string
 +	for _, action := range actions {
++		if _, _, ok := parseTell(action); ok {
++			if note := s.tell(ctx, channel, threadTS, action, told); note != "" {
++				actionNotes = append(actionNotes, note)
++			}
++			continue
++		}
 +		note, newBeam, err := s.botAction(ctx, name, action)
 +		if err != nil {
 +			note = fmt.Sprintf("Could not %s: %s", action, trace.UserMessage(err))
@@ -1515,6 +1563,7 @@ index 00000000000..c7c31ae3524
 +` + botActionPrefix + ` unpublish
 +` + botActionPrefix + ` create_beam
 +Only request create_beam if the user explicitly asks for an additional beam.
++` + tellInstructions + `
 +The Slack bot deletes beams itself: if the user asks to delete beams, tell them to say "delete" followed by the beam names, or "delete all my beams".
 +
 +`)
@@ -1577,10 +1626,10 @@ index 00000000000..c7c31ae3524
 +}
 diff --git a/integrations/access/slack/beams_bot_test.go b/integrations/access/slack/beams_bot_test.go
 new file mode 100644
-index 00000000000..86324dfead0
+index 00000000000..abc52d164af
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot_test.go
-@@ -0,0 +1,493 @@
+@@ -0,0 +1,494 @@
 +package slack
 +
 +import (
@@ -1613,11 +1662,12 @@ index 00000000000..86324dfead0
 +		{name: "edit", event: BeamsMessageEvent{EventType: "message", ChannelType: "im", User: "U1", Subtype: "message_changed", Text: "hi"}},
 +		{name: "image only in a thread", followUp: true, event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", Subtype: "file_share", Files: []SlackFile{{Name: "dog.png"}}}, want: "Here's an attachment."},
 +		{name: "mention with an image", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT> tell me about this image", Files: []SlackFile{{Name: "dog.png"}}}, want: "tell me about this image"},
++		{name: "mentions someone", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT> tell <@UANNA> the site is down"}, want: "tell <@UANNA> the site is down"},
 +		{name: "empty mention", event: BeamsMessageEvent{EventType: "app_mention", User: "U1", Text: "<@UBOT>"}},
 +		{name: "thread follow-up", followUp: true, event: BeamsMessageEvent{EventType: "message", ChannelType: "channel", User: "U1", ThreadTS: "1.2", Text: "how's that going?"}, want: "how's that going?"},
 +	} {
 +		t.Run(tc.name, func(t *testing.T) {
-+			got, ok := botRequest(tc.event, tc.followUp)
++			got, ok := botRequest(tc.event, tc.followUp, "UBOT")
 +			require.Equal(t, tc.want != "", ok)
 +			require.Equal(t, tc.want, got)
 +		})
@@ -2076,10 +2126,10 @@ index 00000000000..86324dfead0
 +}
 diff --git a/integrations/access/slack/beams_chat.go b/integrations/access/slack/beams_chat.go
 new file mode 100644
-index 00000000000..0327a354c45
+index 00000000000..33443eb858d
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat.go
-@@ -0,0 +1,365 @@
+@@ -0,0 +1,370 @@
 +package slack
 +
 +import (
@@ -2152,13 +2202,18 @@ index 00000000000..0327a354c45
 +func chatSystemPrompt(username string) string {
 +	return fmt.Sprintf(`You are Teleport Beams Bot, a friendly assistant in Slack, talking with %s. Answer conversationally and concisely, using Slack formatting (*bold*, _italic_, `+"`code`"+`, and • for bullets).
 +
-+Some requests need a computer: writing, running, or testing code; creating or editing files, webpages, or apps; installing software; publishing something; or creating, listing, or deleting Teleport Beams. For those, reply with exactly %s and nothing else, and a coding agent in a beam will take over. Short code snippets inside an answer are fine; hand off only when something has to be built, run, or saved.`, username, chatHandoff)
++Some requests need a computer: writing, running, or testing code; creating or editing files, webpages, or apps; installing software; publishing something; or creating, listing, or deleting Teleport Beams. For those, reply with exactly %s and nothing else (after any tell lines), and a coding agent in a beam will take over. Short code snippets inside an answer are fine; hand off only when something has to be built, run, or saved.
++
++`, username, chatHandoff) + tellInstructions + `
++Put tell lines first, then reply as usual: a short acknowledgement, or ` + chatHandoff + ` if the rest of the request needs a computer.`
 +}
 +
 +// chatTurn answers a request in a chat thread. It returns handoff when the
 +// request needs a coding agent in a beam instead, along with the earlier
 +// conversation so the agent has context.
-+func (s beamsSession) chatTurn(ctx context.Context, historyPath, agent, text string, images []attachment) (reply string, handoff bool, history []chatMessage, err error) {
++//
++// actions are the tell actions the model asked for, to carry out either way.
++func (s beamsSession) chatTurn(ctx context.Context, historyPath, agent, text string, images []attachment) (reply string, handoff bool, history []chatMessage, actions []string, err error) {
 +	history = readChatHistory(historyPath)
 +	messages := append(append([]chatMessage{}, history...), chatMessage{Role: "user", Content: text, Images: images})
 +
@@ -2168,11 +2223,11 @@ index 00000000000..0327a354c45
 +	}
 +	reply, err = chat(ctx, s, agent, messages)
 +	if err != nil {
-+		return "", false, history, trace.Wrap(err)
++		return "", false, history, nil, trace.Wrap(err)
 +	}
-+	reply = strings.TrimSpace(reply)
++	reply, actions = parseBotActions(reply)
 +	if strings.HasPrefix(reply, chatHandoff) {
-+		return "", true, history, nil
++		return "", true, history, actions, nil
 +	}
 +
 +	// Keep only a note of the images in the history.
@@ -2184,9 +2239,9 @@ index 00000000000..0327a354c45
 +		updated = updated[len(updated)-chatHistoryLimit:]
 +	}
 +	if err := writeChatHistory(historyPath, updated); err != nil {
-+		return "", false, history, trace.Wrap(err)
++		return "", false, history, nil, trace.Wrap(err)
 +	}
-+	return reply, false, history, nil
++	return reply, false, history, actions, nil
 +}
 +
 +func readChatHistory(path string) []chatMessage {
@@ -2814,10 +2869,10 @@ index 00000000000..b13626dacb7
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..3fd11ae8168
+index 00000000000..7c32d714c32
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,750 @@
+@@ -0,0 +1,755 @@
 +package slack
 +
 +import (
@@ -2889,6 +2944,11 @@ index 00000000000..3fd11ae8168
 +	// Chat answers a chat turn as the user. It defaults to calling the
 +	// Teleport LLM app for the agent; tests replace it.
 +	Chat func(ctx context.Context, s beamsSession, agent string, messages []chatMessage) (string, error)
++	// FindPeople looks up Slack users by name or <@ID> mention, for messages
++	// the bot sends for a user.
++	FindPeople func(ctx context.Context, query string) ([]SlackPerson, error)
++	// Post sends a Slack message, in a thread when threadTS is set.
++	Post func(ctx context.Context, channel, threadTS, text string) error
 +}
 +
 +// beamsSession is the per-command execution context for one Slack user.
@@ -3960,8 +4020,305 @@ index 00000000000..13eb8f29840
 +	}
 +	return "The user attached these files, now in this runtime:\n- " + strings.Join(paths, "\n- ") + "\n"
 +}
+diff --git a/integrations/access/slack/beams_tell.go b/integrations/access/slack/beams_tell.go
+new file mode 100644
+index 00000000000..e82f25db53f
+--- /dev/null
++++ b/integrations/access/slack/beams_tell.go
+@@ -0,0 +1,145 @@
++package slack
++
++import (
++	"cmp"
++	"context"
++	"fmt"
++	"regexp"
++	"slices"
++	"strings"
++
++	"github.com/gravitational/trace"
++
++	"github.com/gravitational/teleport/integrations/lib/logger"
++)
++
++// tellInstructions explains the tell action to the chat model and to coding
++// agents.
++const tellInstructions = `You can send Slack messages for the user. When they ask you to tell, notify, ping, or let someone know something, add one line per person:
++` + botActionPrefix + ` tell <person> :: <message>
++<person> is the name the user gave, or the <@ID> mention if they used one. Write <message> as a short note to that person with what the user asked you to pass on; if it is about a problem or incident, add that we're on it. The Slack bot sends it from the user and reports any problem, so never say you can't message people.`
++
++// mentionID matches a Slack user mention such as <@U123> or <@U123|anna>.
++var mentionID = regexp.MustCompile(`^<@([A-Z0-9]+)(?:\|[^>]*)?>$`)
++
++// SlackPerson is a Slack user the bot can send a message to for a user.
++type SlackPerson struct {
++	ID          string
++	Name        string
++	RealName    string
++	DisplayName string
++}
++
++func (p SlackPerson) label() string {
++	return cmp.Or(p.RealName, p.DisplayName, p.Name, p.ID)
++}
++
++// parseTell reads a "tell <person> :: <message>" action.
++func parseTell(action string) (who, message string, ok bool) {
++	rest, ok := strings.CutPrefix(action, "tell ")
++	if !ok {
++		return "", "", false
++	}
++	who, message, ok = strings.Cut(rest, "::")
++	who, message = strings.TrimSpace(who), strings.TrimSpace(message)
++	return who, message, ok && who != "" && message != ""
++}
++
++// matchPeople finds the Slack users a name refers to. A full name or handle
++// wins; otherwise a display name or any word of a name, such as a first
++// name. Display names alone are often just a first name, so they don't win.
++func matchPeople(people []SlackPerson, query string) []SlackPerson {
++	q := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(query), "@"))
++	if q == "" {
++		return nil
++	}
++	var exact, partial []SlackPerson
++	for _, p := range people {
++		names := []string{strings.ToLower(p.RealName), strings.ToLower(p.DisplayName), strings.ToLower(p.Name)}
++		switch {
++		case q == names[0] || q == names[2]:
++			exact = append(exact, p)
++		case slices.ContainsFunc(names, func(name string) bool {
++			return slices.Contains(nameWords(name), q) || (strings.Contains(q, " ") && strings.HasPrefix(name, q))
++		}):
++			partial = append(partial, p)
++		}
++	}
++	if len(exact) > 0 {
++		return exact
++	}
++	return partial
++}
++
++func nameWords(name string) []string {
++	return strings.FieldsFunc(name, func(r rune) bool {
++		return r == ' ' || r == '.' || r == '_' || r == '-'
++	})
++}
++
++// tell sends a message to someone for the user. From a channel thread it is
++// posted in the thread with a mention, so they are notified there; from a
++// direct message with the bot it goes to them directly. told records who has
++// been messaged during this request so nobody gets the same note twice. It
++// returns a note for the user, empty when the message in the thread speaks
++// for itself.
++func (s beamsSession) tell(ctx context.Context, channel, threadTS, action string, told map[string]string) string {
++	who, message, ok := parseTell(action)
++	if !ok {
++		return ""
++	}
++	if s.runner.FindPeople == nil || s.runner.Post == nil {
++		return "I can't send Slack messages from here."
++	}
++	people, err := s.runner.FindPeople(ctx, who)
++	if err != nil {
++		logger.Get(ctx).WarnContext(ctx, "Failed to look up Slack users", "query", who, "error", err)
++		return fmt.Sprintf("I couldn't look up %s in Slack: %s", who, trace.UserMessage(err))
++	}
++	switch len(people) {
++	case 0:
++		return fmt.Sprintf("I couldn't find anyone in Slack called %s, so I didn't message them.", who)
++	case 1:
++	default:
++		var names []string
++		for _, p := range people[:min(len(people), 5)] {
++			names = append(names, p.label())
++		}
++		return fmt.Sprintf("More than one person matches %s (%s), so I didn't message anyone. Say which one, for example \"tell %s …\".",
++			who, strings.Join(names, ", "), names[0])
++	}
++	person := people[0]
++	if _, ok := told[person.ID]; ok {
++		return ""
++	}
++
++	direct := isDirectMessage(channel)
++	if direct {
++		err = s.runner.Post(ctx, person.ID, "", fmt.Sprintf("Message from <@%s>: %s", s.slackUserID, message))
++	} else {
++		err = s.runner.Post(ctx, channel, threadTS, fmt.Sprintf("<@%s> message from <@%s>: %s", person.ID, s.slackUserID, message))
++	}
++	if err != nil {
++		logger.Get(ctx).WarnContext(ctx, "Failed to send a Slack message for the user", "to_slack_user_id", person.ID, "error", err)
++		return fmt.Sprintf("I couldn't message %s: %s", person.label(), trace.UserMessage(err))
++	}
++	told[person.ID] = fmt.Sprintf("%s: %s", person.label(), message)
++	s.logRequest(ctx, "tell", message, "to_slack_user_id", person.ID)
++	if direct {
++		return fmt.Sprintf("Sent %s a direct message.", person.label())
++	}
++	return ""
++}
++
++// alreadyTold tells a coding agent which messages were sent before it ran.
++func alreadyTold(told map[string]string) string {
++	if len(told) == 0 {
++		return ""
++	}
++	lines := make([]string, 0, len(told))
++	for _, line := range told {
++		lines = append(lines, "- "+line)
++	}
++	slices.Sort(lines)
++	return "The Slack bot already sent these messages for the user, so don't send them again:\n" + strings.Join(lines, "\n") + "\n"
++}
+diff --git a/integrations/access/slack/beams_tell_test.go b/integrations/access/slack/beams_tell_test.go
+new file mode 100644
+index 00000000000..6aecf5f4e9d
+--- /dev/null
++++ b/integrations/access/slack/beams_tell_test.go
+@@ -0,0 +1,140 @@
++package slack
++
++import (
++	"context"
++	"os"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++)
++
++var testPeople = []SlackPerson{
++	{ID: "UANNA", Name: "anna.m", RealName: "Anna Mikhailova", DisplayName: "Anna"},
++	{ID: "UBOB", Name: "bob", RealName: "Bob Smith"},
++	{ID: "UANNE", Name: "anne", RealName: "Anne Lee"},
++}
++
++func TestMatchPeople(t *testing.T) {
++	ids := func(people []SlackPerson) []string {
++		var out []string
++		for _, p := range people {
++			out = append(out, p.ID)
++		}
++		return out
++	}
++	require.Equal(t, []string{"UANNA"}, ids(matchPeople(testPeople, "Anna")))
++	require.Equal(t, []string{"UANNA"}, ids(matchPeople(testPeople, "@anna.m")))
++	require.Equal(t, []string{"UANNA"}, ids(matchPeople(testPeople, "mikhailova")))
++	require.Equal(t, []string{"UBOB"}, ids(matchPeople(testPeople, "bob smith")))
++	require.Equal(t, []string{"UANNA"}, ids(matchPeople(testPeople, "anna m")))
++	require.Empty(t, matchPeople(testPeople, "ann"))
++	require.Empty(t, matchPeople(testPeople, "carol"))
++	require.Len(t, matchPeople(append(testPeople, SlackPerson{ID: "UANNA2", RealName: "Anna Smith"}), "anna"), 2)
++}
++
++func TestParseTell(t *testing.T) {
++	who, message, ok := parseTell("tell Anna :: The website is down. We're on it.")
++	require.True(t, ok)
++	require.Equal(t, "Anna", who)
++	require.Equal(t, "The website is down. We're on it.", message)
++	_, _, ok = parseTell("tell Anna the website is down")
++	require.False(t, ok)
++	_, _, ok = parseTell("publish")
++	require.False(t, ok)
++}
++
++type fakeSlack struct {
++	mu    sync.Mutex
++	posts []string
++}
++
++func (f *fakeSlack) find(_ context.Context, query string) ([]SlackPerson, error) {
++	if id := mentionID.FindStringSubmatch(query); id != nil {
++		for _, p := range testPeople {
++			if p.ID == id[1] {
++				return []SlackPerson{p}, nil
++			}
++		}
++	}
++	return matchPeople(testPeople, query), nil
++}
++
++func (f *fakeSlack) post(_ context.Context, channel, threadTS, text string) error {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	f.posts = append(f.posts, channel+" "+threadTS+" "+text)
++	return nil
++}
++
++func tellRunner(t *testing.T, reply string) (BeamsCommandRunner, *fakeSlack, string) {
++	tshPath, logPath := writeFakeTSH(t)
++	slack := &fakeSlack{}
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++		Chat: func(context.Context, beamsSession, string, []chatMessage) (string, error) {
++			return reply, nil
++		},
++		FindPeople: slack.find,
++		Post:       slack.post,
++	}
++	_, err := runner.Run(t.Context(), "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	return runner, slack, logPath
++}
++
++func TestBotTellsSomeoneInThread(t *testing.T) {
++	runner, slack, _ := tellRunner(t, "BEAMS_BOT_ACTION: tell Anna :: The production website is down. We're on it.\nI'll let Anna know.")
++	out, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.007000", "tell Anna the website is down")
++	require.NoError(t, err)
++	require.Equal(t, "I'll let Anna know.", out)
++	require.Equal(t, []string{"C1 1700000000.007000 <@UANNA> message from <@UALICE>: The production website is down. We're on it."}, slack.posts)
++}
++
++func TestBotTellsSomeoneByDirectMessage(t *testing.T) {
++	runner, slack, _ := tellRunner(t, "BEAMS_BOT_ACTION: tell <@UANNA> :: The website is down. We're on it.\nOn it.")
++	out, err := runner.Ask(t.Context(), "T1", "UALICE", "D1-1700000000.008000", "tell <@UANNA> the website is down")
++	require.NoError(t, err)
++	require.Equal(t, "On it.\n\nSent Anna Mikhailova a direct message.", out)
++	require.Equal(t, []string{"UANNA  Message from <@UALICE>: The website is down. We're on it."}, slack.posts)
++}
++
++func TestBotTellNeedsOnePerson(t *testing.T) {
++	runner, slack, _ := tellRunner(t, "BEAMS_BOT_ACTION: tell An :: hi\nBEAMS_BOT_ACTION: tell carol :: hi\nSure.")
++	testPeople = append(testPeople, SlackPerson{ID: "UAN2", RealName: "An Two"}, SlackPerson{ID: "UAN3", RealName: "An Three"})
++	t.Cleanup(func() { testPeople = testPeople[:3] })
++	out, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.009000", "tell An and carol hi")
++	require.NoError(t, err)
++	require.Contains(t, out, "More than one person matches An (An Two, An Three)")
++	require.Contains(t, out, "I couldn't find anyone in Slack called carol")
++	require.Empty(t, slack.posts)
++}
++
++func TestBotTellsBeforeBeamWork(t *testing.T) {
++	runner, slack, logPath := tellRunner(t, "BEAMS_BOT_ACTION: tell Anna :: The production website is down. We're on it.\nHANDOFF")
++	_, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.010000", "tell Anna the website is down and write a script to test it")
++	require.NoError(t, err)
++	require.Len(t, slack.posts, 1)
++
++	// The coding agent knows the message already went out.
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), "already sent these messages")
++	require.Contains(t, string(calls), "Anna Mikhailova: The production website is down.")
++
++	// A repeat from the agent is not sent twice.
++	s, err := runner.newSession(t.Context(), "T1", "UALICE")
++	require.NoError(t, err)
++	told := map[string]string{}
++	require.Empty(t, s.tell(t.Context(), "C1", "1.2", "tell Anna :: once", told))
++	require.Empty(t, s.tell(t.Context(), "C1", "1.2", "tell anna.m :: twice", told))
++	require.Len(t, slack.posts, 2)
++	require.True(t, strings.HasSuffix(slack.posts[1], "once"))
++}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
-index d0abf811e9a..de1c4aca533 100644
+index d0abf811e9a..5914ba3c4f6 100644
 --- a/integrations/access/slack/bot.go
 +++ b/integrations/access/slack/bot.go
 @@ -19,11 +19,15 @@
@@ -4010,7 +4367,7 @@ index d0abf811e9a..de1c4aca533 100644
  	return apps
  }
  
-@@ -235,6 +247,108 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
+@@ -235,6 +247,167 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
  	return trace.Wrap(err)
  }
  
@@ -4105,6 +4462,65 @@ index d0abf811e9a..de1c4aca533 100644
 +// is connected to.
 +func (b Bot) TeleportClusterName() string {
 +	return b.clusterName
++}
++
++// BotUserID returns the bot's own Slack user ID.
++func (b Bot) BotUserID(ctx context.Context) (string, error) {
++	var result struct {
++		APIResponse
++		UserID string `json:"user_id"`
++	}
++	_, err := b.client.NewRequest().
++		SetContext(ctx).
++		SetResult(&result).
++		Post("auth.test")
++	return result.UserID, trace.Wrap(err)
++}
++
++// FindSlackPeople finds the active people in the workspace a name or <@ID>
++// mention refers to.
++func (b Bot) FindSlackPeople(ctx context.Context, query string) ([]SlackPerson, error) {
++	if id := mentionID.FindStringSubmatch(strings.TrimSpace(query)); id != nil {
++		var result struct {
++			APIResponse
++			User SlackMember `json:"user"`
++		}
++		_, err := b.client.NewRequest().
++			SetContext(ctx).
++			SetQueryParam("user", id[1]).
++			SetResult(&result).
++			Get("users.info")
++		if err != nil {
++			return nil, trace.Wrap(err)
++		}
++		return []SlackPerson{result.User.person()}, nil
++	}
++
++	var people []SlackPerson
++	cursor := ""
++	for {
++		var result UsersListResponse
++		req := b.client.NewRequest().
++			SetContext(ctx).
++			SetQueryParam("limit", "200").
++			SetResult(&result)
++		if cursor != "" {
++			req.SetQueryParam("cursor", cursor)
++		}
++		if _, err := req.Get("users.list"); err != nil {
++			return nil, trace.Wrap(err)
++		}
++		for _, member := range result.Members {
++			if member.Deleted || member.IsBot || member.ID == "USLACKBOT" {
++				continue
++			}
++			people = append(people, member.person())
++		}
++		if cursor = result.ResponseMetadata.NextCursor; cursor == "" {
++			break
++		}
++	}
++	return matchPeople(people, query), nil
 +}
 +
 +// PostBeamsThreadReply posts a message in a Slack thread.
@@ -4400,7 +4816,7 @@ index 60e14372f32..272b546b498 100644
  			name:    "malformed payload; skip",
  			payload: malformedPayload,
 diff --git a/integrations/access/slack/types.go b/integrations/access/slack/types.go
-index cfac4452c25..5ddf952936f 100644
+index cfac4452c25..a955d4ee194 100644
 --- a/integrations/access/slack/types.go
 +++ b/integrations/access/slack/types.go
 @@ -30,6 +30,8 @@ const (
@@ -4412,7 +4828,39 @@ index cfac4452c25..5ddf952936f 100644
  	SocketModeEventReasonLinkDisabled = "link_disabled"
  )
  
-@@ -146,6 +148,10 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
+@@ -73,6 +75,31 @@ type User struct {
+ 	Profile UserProfile `json:"profile"`
+ }
+ 
++// UsersListResponse is a page of users.list.
++type UsersListResponse struct {
++	APIResponse
++	Members          []SlackMember `json:"members"`
++	ResponseMetadata struct {
++		NextCursor string `json:"next_cursor"`
++	} `json:"response_metadata"`
++}
++
++// SlackMember is a user in users.list or users.info.
++type SlackMember struct {
++	ID      string `json:"id"`
++	Name    string `json:"name"`
++	Deleted bool   `json:"deleted"`
++	IsBot   bool   `json:"is_bot"`
++	Profile struct {
++		RealName    string `json:"real_name"`
++		DisplayName string `json:"display_name"`
++	} `json:"profile"`
++}
++
++func (m SlackMember) person() SlackPerson {
++	return SlackPerson{ID: m.ID, Name: m.Name, RealName: m.Profile.RealName, DisplayName: m.Profile.DisplayName}
++}
++
+ type UserProfile struct {
+ 	Email string `json:"email"`
+ }
+@@ -146,6 +173,10 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
  		var val BlockActionsEvent
  		err = trace.Wrap(json.Unmarshal(data, &val))
  		interaction = val
@@ -4423,7 +4871,7 @@ index cfac4452c25..5ddf952936f 100644
  	default:
  		err = trace.BadParameter("unsupported interaction event type %q", interactionType.Type)
  	}
-@@ -156,6 +162,90 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
+@@ -156,6 +187,90 @@ func UnmarshalInteractionEvent(data []byte) (InteractionEvent, error) {
  	return interaction, nil
  }
  

@@ -279,6 +279,31 @@ sends up to 2 images of 3.5 MB (Teleport's model proxy caps requests at
 history keeps "[attached name]". Otherwise the request goes to a beam and
 files are copied with `tsh beams scp` into `/tmp/slack-attachments/`.
 
+Telling people (`beams_tell.go`): the chat model and coding agents can emit
+`BEAMS_BOT_ACTION: tell <person> :: <message>` (`tellInstructions` in both
+prompts). `<person>` is a name or `<@ID>`; `FindSlackPeople` uses `users.info`
+for a mention, else pages `users.list` (skipping deleted, bots, Slackbot) and
+`matchPeople` picks: full real name or handle exactly, else a display name or
+any word of a name. Display names don't win outright since they're often a
+first name. 0 or 2+ matches send nothing and return a note. Channel threads:
+post in the thread `<@them> message from <@requester>: ...`; DMs (`D` channel):
+DM the person instead (`chat.postMessage` to the user ID). Chat-stage tells go
+out immediately, even when the model also answers HANDOFF (tell lines come
+first, `chatTurn` returns them); the agent prompt then lists them under
+"already sent", and `told` (per request, keyed by Slack user ID) drops repeats.
+`botRequest` now strips only the bot's own mention (`BotUserID` via
+`auth.test` at startup) so `<@ID>` mentions of others reach the model; if
+`auth.test` fails it strips all mentions as before. Logged as kind `tell`
+with `to_slack_user_id`. Paul asked for incident notes to add "we're on it".
+
+`EmitAuditEvent` was tested live as the bot (2026-10-05): with an
+`event: create` rule on the bot's roles it gets past RBAC and fails with
+"this request can be only executed by a teleport built-in server"
+(`getLocalServerID` needs a host certificate). Without the rule:
+`access denied to perform action "create" on "event"`. A rule on the
+generated `bot-<name>` role does nothing, since the tbot output carries the
+bot's assigned roles, not that one.
+
 Request log (`beams_audit.go`): plugins can't call `EmitAuditEvent` (only
 built-in Teleport servers can), and `app.session.llm_request` has
 provider/model/tokens but no prompt. So `logRequest` writes an INFO line
