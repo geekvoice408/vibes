@@ -869,10 +869,10 @@ index 00000000000..6e3b0311358
 +}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..5cf6132275d
+index 00000000000..14d422cdbdf
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,754 @@
+@@ -0,0 +1,808 @@
 +package slack
 +
 +import (
@@ -1085,6 +1085,12 @@ index 00000000000..5cf6132275d
 +	if reply, ok, err := s.demoSkit(ctx, threadPath, text); ok || err != nil {
 +		return AskResult{Reply: truncateSlackOutput(strings.Join(append(notes, reply), "\n\n"))}, trace.Wrap(err)
 +	}
++	// A plan waiting for approval is answered by the next message: yes carries
++	// it out, no drops it, and anything else revises it.
++	awaitingApproval := takeApproval(threadPath)
++	if awaitingApproval && noReply.MatchString(text) {
++		return AskResult{Reply: "OK, I won't go ahead with that."}, nil
++	}
 +	if names, ok := removeTargets(text, beams, thread.beam); ok {
 +		s.logRequest(ctx, "delete", text, "beams", names)
 +		reply, err := s.removeBeams(ctx, beams, names, thread, threadPath, notes)
@@ -1190,15 +1196,30 @@ index 00000000000..5cf6132275d
 +		request += "\n\n" + sent
 +	}
 +
++	// Claude plans first and acts once the user approves the plan, which only
++	// makes sense in the conversation that made it.
++	approved := awaitingApproval && continued && yesReply.MatchString(text)
++	planning := agent == agentClaude && !r.Config.ClaudeSkipApproval && !approved
++	prompt := botPrompt(name, s.username, created, planning, chatContext(chatHistory), request)
++	switch {
++	case approved:
++		prompt = "The user approved your plan. Carry it out now, then reply with the result."
++	case awaitingApproval && continued:
++		prompt = "The user replied to your plan: " + request + "\nRevise the plan, or answer them if nothing needs to change."
++	}
++
 +	s.logRequest(ctx, "beam", text,
-+		"beam", name, "agent", agent, "continued", continued, "attachments", attachmentNames(files))
++		"beam", name, "agent", agent, "continued", continued, "planning", planning, "approved", approved,
++		"attachments", attachmentNames(files))
 +
 +	agentArgs := []string{name}
 +	if continued {
 +		agentArgs = append(agentArgs, "--continue")
 +	}
-+	agentArgs = append(agentArgs, botPrompt(name, s.username, created, chatContext(chatHistory), request))
-+	run := s.claude
++	agentArgs = append(agentArgs, prompt)
++	run := func(ctx context.Context, args []string) (string, error) {
++		return s.claudeForBot(ctx, args, planning)
++	}
 +	if agent == agentCodex {
 +		run = s.codex
 +	}
@@ -1213,10 +1234,23 @@ index 00000000000..5cf6132275d
 +	reply, actions := parseBotActions(output)
 +	var actionNotes []string
 +	for _, action := range actions {
++		if action == "approve" {
++			if planning {
++				if err := os.WriteFile(approvalPath(threadPath), nil, 0o600); err != nil {
++					return AskResult{}, trace.Wrap(err)
++				}
++				actionNotes = append(actionNotes, "Reply *yes* to go ahead, or tell me what to change.")
++			}
++			continue
++		}
 +		if _, _, ok := parseTell(action); ok {
 +			if note := s.tell(ctx, channel, threadTS, action, told); note != "" {
 +				actionNotes = append(actionNotes, note)
 +			}
++			continue
++		}
++		if planning {
++			// Nothing changes until the plan is approved.
 +			continue
 +		}
 +		note, newBeam, err := s.botAction(ctx, name, action)
@@ -1552,7 +1586,24 @@ index 00000000000..5cf6132275d
 +	return newest, false
 +}
 +
-+func botPrompt(beam, username string, created bool, earlier, request string) string {
++// approvalPath marks a thread whose plan is waiting for the user's approval.
++func approvalPath(threadPath string) string {
++	return threadPath + ".approval"
++}
++
++// takeApproval reports whether the thread has a plan waiting for approval,
++// clearing it: the user's next message answers it.
++func takeApproval(threadPath string) bool {
++	return os.Remove(approvalPath(threadPath)) == nil
++}
++
++// planInstructions tell Claude, in plan mode, to answer or propose a plan.
++const planInstructions = `You are in plan mode: you can look around with read-only tools but cannot change anything yet. If the request only needs information, answer it. If it needs changes (writing or editing files, running commands that change things, installing software, starting services, publishing), reply with a short plan instead: what you'll do in a few bullets, including any script you'll write. Then end with the line:
++` + botActionPrefix + ` approve
++The Slack bot asks the user to approve, and you'll carry the plan out in this same conversation. Until then, don't request publish, unpublish, or create_beam. Don't mention plan mode, plan files, or ExitPlanMode.
++`
++
++func botPrompt(beam, username string, created, planning bool, earlier, request string) string {
 +	var b strings.Builder
 +	fmt.Fprintf(&b, "You are the Teleport Beams Bot, a Slack assistant working inside the Teleport Beam %q, an ephemeral Debian runtime, on behalf of %s.", beam, username)
 +	if created {
@@ -1568,8 +1619,11 @@ index 00000000000..5cf6132275d
 +Only request create_beam if the user explicitly asks for an additional beam.
 +` + tellInstructions + `
 +The Slack bot deletes beams itself: if the user asks to delete beams, tell them to say "delete" followed by the beam names, or "delete all my beams".
-+
 +`)
++	if planning {
++		b.WriteString(planInstructions)
++	}
++	b.WriteString("\n")
 +	if earlier != "" {
 +		b.WriteString("Earlier in this Slack conversation:\n")
 +		b.WriteString(earlier)
@@ -1629,10 +1683,10 @@ index 00000000000..5cf6132275d
 +}
 diff --git a/integrations/access/slack/beams_bot_test.go b/integrations/access/slack/beams_bot_test.go
 new file mode 100644
-index 00000000000..abc52d164af
+index 00000000000..99aff591af0
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot_test.go
-@@ -0,0 +1,494 @@
+@@ -0,0 +1,564 @@
 +package slack
 +
 +import (
@@ -1718,13 +1772,14 @@ index 00000000000..abc52d164af
 +	tshPath, logPath := writeFakeTSH(t)
 +	runner := BeamsCommandRunner{
 +		Config: BeamsConfig{
-+			TSHPath:        tshPath,
-+			Proxy:          "example.teleport.sh:443",
-+			PluginIdentity: "/plugin-identity",
-+			ProfilesDir:    t.TempDir(),
-+			BotName:        "teleport-beams-bot",
-+			DelegationTTL:  "168h",
-+			Users:          map[string]string{"UALICE": "alice@example.com"},
++			TSHPath:            tshPath,
++			Proxy:              "example.teleport.sh:443",
++			PluginIdentity:     "/plugin-identity",
++			ProfilesDir:        t.TempDir(),
++			BotName:            "teleport-beams-bot",
++			DelegationTTL:      "168h",
++			Users:              map[string]string{"UALICE": "alice@example.com"},
++			ClaudeSkipApproval: true,
 +		},
 +		MintIdentity: fakeMint,
 +	}
@@ -1826,12 +1881,13 @@ index 00000000000..abc52d164af
 +	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
 +	runner := BeamsCommandRunner{
 +		Config: BeamsConfig{
-+			TSHPath:        tshPath,
-+			Proxy:          "example.teleport.sh:443",
-+			PluginIdentity: "/plugin-identity",
-+			ProfilesDir:    t.TempDir(),
-+			BotName:        "teleport-beams-bot",
-+			Users:          map[string]string{"UALICE": "alice@example.com"},
++			TSHPath:            tshPath,
++			Proxy:              "example.teleport.sh:443",
++			PluginIdentity:     "/plugin-identity",
++			ProfilesDir:        t.TempDir(),
++			BotName:            "teleport-beams-bot",
++			Users:              map[string]string{"UALICE": "alice@example.com"},
++			ClaudeSkipApproval: true,
 +		},
 +		MintIdentity: fakeMint,
 +	}
@@ -2126,6 +2182,74 @@ index 00000000000..abc52d164af
 +	require.Contains(t, res.Reply, "Thanks, you're connected as alice@example.com.")
 +	require.Contains(t, res.Reply, "Built the page.")
 +	require.True(t, runner.Connected("T1", "UALICE"))
++}
++
++func TestBotAsksBeforeActing(t *testing.T) {
++	dir := t.TempDir()
++	logPath := filepath.Join(dir, "calls")
++	tshPath := filepath.Join(dir, "tsh")
++	// Claude proposes a plan in plan mode and acts once allowed to.
++	script := `#!/bin/sh
++echo "$@" >> ` + logPath + `
++case "$3 $4" in
++"beams ls") echo '[{"id":"mine","owner":"alice@example.com"}]' ;;
++"beams exec")
++  case "$6" in
++  *"'plan'"*) printf 'Plan:\n- write check.sh\n- run it\nBEAMS_BOT_ACTION: approve\nBEAMS_BOT_ACTION: publish\n' ;;
++  *) printf 'Done: HTTP 200.\nBEAMS_BOT_ACTION: publish\n' ;;
++  esac ;;
++"beams publish") echo '{"id":"mine","url":"https://mine.example"}' ;;
++*) echo ok ;;
++esac
++`
++	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	thread := "C1-1700000000.013000"
++
++	// The plan comes back for approval, and nothing is published yet.
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "write a script to check example.com and run it")
++	require.NoError(t, err)
++	require.Equal(t, "Plan:\n- write check.sh\n- run it\n\nReply *yes* to go ahead, or tell me what to change.", out)
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), `'claude' '-p' '--permission-mode' 'plan'`)
++	require.NotContains(t, string(calls), "dangerously")
++	require.NotContains(t, string(calls), "beams publish")
++
++	// Anything but yes or no revises the plan, still in plan mode.
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "yes, but check example.org too")
++	require.NoError(t, err)
++	require.Contains(t, out, "Reply *yes*")
++	calls, err = os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), `'--permission-mode' 'plan' '--continue' 'The user replied to your plan: yes, but check example.org too`)
++
++	// Yes carries it out in the same conversation.
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "yes please")
++	require.NoError(t, err)
++	require.Contains(t, out, "Done: HTTP 200.")
++	require.Contains(t, out, "Published: https://mine.example")
++	calls, err = os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), `'claude' '-p' '--dangerously-skip-permissions' '--continue' 'The user approved your plan.`)
++
++	// No drops a plan.
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "now delete the script")
++	require.NoError(t, err)
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "no thanks")
++	require.NoError(t, err)
++	require.Equal(t, "OK, I won't go ahead with that.", out)
 +}
 diff --git a/integrations/access/slack/beams_chat.go b/integrations/access/slack/beams_chat.go
 new file mode 100644
@@ -2893,10 +3017,10 @@ index 00000000000..5af4ffc7512
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..7c32d714c32
+index 00000000000..630097f2656
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,755 @@
+@@ -0,0 +1,799 @@
 +package slack
 +
 +import (
@@ -3236,7 +3360,8 @@ index 00000000000..7c32d714c32
 +	// The remote side runs the command through a shell, so pass one quoted
 +	// command string rather than separate arguments.
 +	command := agent.command(continued, strings.Join(args, " "))
-+	return s.target(ctx, []string{"exec", name, shellQuoteJoin(command)})
++	// Without a closed stdin, Claude Code waits 3 seconds for piped input.
++	return s.target(ctx, []string{"exec", name, shellQuoteJoin(command) + " < /dev/null"})
 +}
 +
 +// claude runs Claude Code in print mode inside a beam and returns its answer.
@@ -3256,6 +3381,49 @@ index 00000000000..7c32d714c32
 +			return append(command, prompt)
 +		},
 +	}, args)
++}
++
++// claudeForBot runs Claude Code for a bot request. While planning it runs in
++// plan mode, where it can look around but not change anything; once the user
++// approves, it may use every tool.
++func (s beamsSession) claudeForBot(ctx context.Context, args []string, planning bool) (string, error) {
++	extraArgs := s.runner.Config.ClaudeArgs
++	if extraArgs == nil {
++		extraArgs = defaultClaudeArgs
++	}
++	extraArgs = withoutPermissionFlags(extraArgs)
++	mode := []string{"--dangerously-skip-permissions"}
++	if planning {
++		mode = []string{"--permission-mode", "plan"}
++	}
++	return s.runAgent(ctx, codingAgent{
++		name:    "claude",
++		timeout: s.runner.Config.ClaudeTimeout,
++		command: func(continued bool, prompt string) []string {
++			command := append(append([]string{"claude", "-p"}, extraArgs...), mode...)
++			if continued {
++				command = append(command, "--continue")
++			}
++			return append(command, prompt)
++		},
++	}, args)
++}
++
++// withoutPermissionFlags drops Claude Code permission flags, which the bot
++// sets itself.
++func withoutPermissionFlags(args []string) []string {
++	var out []string
++	for i := 0; i < len(args); i++ {
++		switch {
++		case args[i] == "--dangerously-skip-permissions", args[i] == "--allow-dangerously-skip-permissions",
++			strings.HasPrefix(args[i], "--permission-mode="):
++		case args[i] == "--permission-mode":
++			i++
++		default:
++			out = append(out, args[i])
++		}
++	}
++	return out
 +}
 +
 +// codex runs Codex non-interactively inside a beam and returns its answer.
@@ -3926,10 +4094,10 @@ index 00000000000..33be7d765f3
 +}
 diff --git a/integrations/access/slack/beams_demo.go b/integrations/access/slack/beams_demo.go
 new file mode 100644
-index 00000000000..9697c46cb32
+index 00000000000..c323e10ead8
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo.go
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,190 @@
 +package slack
 +
 +import (
@@ -3950,8 +4118,10 @@ index 00000000000..9697c46cb32
 +var (
 +	demoTicketRequest = regexp.MustCompile(`(?i)\bzendesk\b.*\btickets?\b|\btickets?\b.*\bzendesk\b`)
 +	demoWebsiteDown   = regexp.MustCompile(`(?i)\blive\s*-?\s*web\s*site\b.*\b(down|not working|broken|unreachable|offline)\b`)
-+	demoYes           = regexp.MustCompile(`(?i)^\W*(yes|yep|yeah|sure|ok|okay|please|do it|go ahead|start it)\b`)
-+	demoNo            = regexp.MustCompile(`(?i)^\W*(no|nope|don't|do not|leave it)\b`)
++	// yesReply and noReply are whole-message answers to an offer, so "yes,
++	// but use port 9090" is a change rather than a yes.
++	yesReply = regexp.MustCompile(`(?i)^\W*(yes|yep|yeah|sure|ok|okay|go ahead|do it|approved?|lgtm|sounds good|start it)(\W+(please|thanks|thank you|go ahead|do it))*\W*$`)
++	noReply  = regexp.MustCompile(`(?i)^\W*(no|nope|cancel|stop|never ?mind|don't|do not|leave it)(\W+(thanks|thank you))*\W*$`)
 +)
 +
 +const (
@@ -3985,11 +4155,11 @@ index 00000000000..9697c46cb32
 +		var fix demoFix
 +		if err := json.Unmarshal(data, &fix); err == nil {
 +			switch {
-+			case demoYes.MatchString(text):
++			case yesReply.MatchString(text):
 +				s.logRequest(ctx, "demo", text)
 +				reply, err := s.demoStartNginx(ctx, fix)
 +				return reply, true, trace.Wrap(err)
-+			case demoNo.MatchString(text):
++			case noReply.MatchString(text):
 +				return "OK, I'll leave nginx stopped.", true, nil
 +			}
 +		}
@@ -4906,7 +5076,7 @@ index a8ecf146bf6..bd8486f3636 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..6c9ca98f0b6 100644
+index e27fd004c15..20c419eecda 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -4918,7 +5088,7 @@ index e27fd004c15..6c9ca98f0b6 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,52 @@ type Config struct {
+@@ -39,12 +41,55 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -4955,6 +5125,9 @@ index e27fd004c15..6c9ca98f0b6 100644
 +	// OmitRequestText leaves what users asked out of the request log, keeping
 +	// only who, when, and what kind of request.
 +	OmitRequestText bool `toml:"omit_request_text"`
++	// ClaudeSkipApproval lets Claude Code act on bot requests without the
++	// user approving a plan first. /beams claude never asks.
++	ClaudeSkipApproval bool `toml:"claude_skip_approval"`
 +	// DemoSkits turns on scripted demo requests: a made-up Zendesk ticket,
 +	// and checking and starting nginx on the server behind the live website.
 +	DemoSkits bool `toml:"demo_skits"`
@@ -4971,7 +5144,7 @@ index e27fd004c15..6c9ca98f0b6 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +173,43 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +176,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -5015,7 +5188,7 @@ index e27fd004c15..6c9ca98f0b6 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +280,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +283,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

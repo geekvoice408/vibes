@@ -255,10 +255,21 @@ For requests that need a computer, Teleport Beams Bot:
    "codex". The thread keeps using that agent (say "use claude" to switch
    back), and switching starts a fresh conversation. The agent is told to
    serve anything it wants to share on port 8080 in the background.
-3. Carries out actions the agent asks for (`publish`, `unpublish`,
+3. **Asks before Claude Code changes anything.** Claude first runs in plan
+   mode, where it can look around but not change anything. Questions it can
+   answer that way get an answer. Otherwise the bot posts Claude's plan with
+   "Reply *yes* to go ahead, or tell me what to change." In the thread:
+   - **yes** (or "go ahead", "lgtm", …) resumes the same Claude conversation
+     with permission to act, and it carries out the plan.
+   - **no** drops the plan.
+   - **anything else**, even "yes, but use port 9090", goes back to Claude to
+     revise the plan.
+
+   Codex doesn't ask; it acts right away.
+4. Carries out actions the agent asks for (`publish`, `unpublish`,
    `create_beam`) from outside the beam, since it cannot manage beams from
    inside the VM.
-4. Replies in the thread with the agent's answer and any published URL.
+5. Replies in the thread with the agent's answer and any published URL.
 
 Asking for another beam creates one, and the rest of that thread works in it:
 
@@ -505,7 +516,8 @@ Start from `config.toml.example`. The Beams settings:
 | `identity_ttl` | `15m` | Lifetime of per-command delegated certificates (max 1h) |
 | `command_timeout` | `2m` | Limit for normal commands |
 | `claude_timeout` | `15m` | Limit for `/beams claude` and the bot's Claude runs |
-| `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags. Print mode cannot ask for tool approval, and beams are throwaway runtimes. |
+| `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags for `/beams claude`, which can't ask for approval. Bot requests set permission flags themselves and drop these. |
+| `claude_skip_approval` | `false` | Let Claude Code act on bot requests without a plan approved in Slack first |
 | `codex_timeout` | `15m` | Limit for `/beams codex` and the bot's Codex runs |
 | `chat_claude_model` | `claude-sonnet-4-5` | Model for chat answers through the `anthropic` app |
 | `chat_codex_model` | `gpt-5` | Model for chat answers through the `openai` app ("use codex") |

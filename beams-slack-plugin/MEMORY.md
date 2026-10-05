@@ -283,6 +283,24 @@ sends up to 2 images of 3.5 MB (Teleport's model proxy caps requests at
 history keeps "[attached name]". Otherwise the request goes to a beam and
 files are copied with `tsh beams scp` into `/tmp/slack-attachments/`.
 
+Approval for Claude (`claudeForBot`, `planInstructions`): bot requests run
+`claude -p --permission-mode plan` (permission flags from `claude_args` are
+dropped). In -p mode ExitPlanMode is disabled, so the plan comes back as the
+result text; the prompt asks Claude to end a plan with `BEAMS_BOT_ACTION:
+approve`, which writes `threads/<key>.approval` and appends "Reply *yes* to
+go ahead...". Other actions except tell are ignored while planning. The next
+message consumes the marker (`takeApproval`): whole-message yes
+(`yesReply`) reruns `--dangerously-skip-permissions --continue "The user
+approved your plan..."`; whole-message no (`noReply`) cancels; anything else
+reruns in plan mode with "The user replied to your plan: ...". Approval needs
+`continued` (same beam/agent, not fresh). Codex and `/beams claude` keep
+acting without approval; `claude_skip_approval` restores the old behaviour.
+Verified live in a beam 2026-10-05. Agent commands end with `< /dev/null`
+since Claude Code otherwise waits 3s for stdin ("no stdin data received").
+Without --dangerously-skip-permissions and without plan mode, -p runs stop at
+the first denied tool and report `permission_denials` in --output-format
+json; plan mode was chosen so the whole plan is approved at once.
+
 Demo skits (`beams_demo.go`, `demo_skits`, off by default): "zendesk" +
 "ticket" replies with a made-up ticket number (no Zendesk call). "live
 website ... down" lists apps (`tsh apps ls` as the user), takes the one with a
