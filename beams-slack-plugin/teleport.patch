@@ -4094,7 +4094,7 @@ index 00000000000..33be7d765f3
 +}
 diff --git a/integrations/access/slack/beams_demo.go b/integrations/access/slack/beams_demo.go
 new file mode 100644
-index 00000000000..52781e561ec
+index 00000000000..1377c2562d1
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo.go
 @@ -0,0 +1,364 @@
@@ -4363,7 +4363,7 @@ index 00000000000..52781e561ec
 +	if err != nil {
 +		logger.Get(ctx).WarnContext(ctx, "Failed to remember the service owner for this thread", "error", err)
 +	}
-+	return fmt.Sprintf("Sent the service owner a direct message: “%s”", demoIssueMessage)
++	return "I contacted the service owner on your behalf."
 +}
 +
 +// demoTellOwnerResolved tells the owner told about the issue in this thread
@@ -4464,7 +4464,7 @@ index 00000000000..52781e561ec
 +}
 diff --git a/integrations/access/slack/beams_demo_test.go b/integrations/access/slack/beams_demo_test.go
 new file mode 100644
-index 00000000000..d906f46db9a
+index 00000000000..3cdf8ea5c50
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo_test.go
 @@ -0,0 +1,154 @@
@@ -4534,7 +4534,7 @@ index 00000000000..d906f46db9a
 +
 +	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "the live website is down, notify the service owner there is an issue with their website")
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Sent the service owner a direct message: “There's an issue with the live website.”")
++	require.Contains(t, out, "I contacted the service owner on your behalf.")
 +	require.Equal(t, []string{"UPAUL  There's an issue with the live website."}, slack.posts)
 +	require.Contains(t, out, "Found the `livewebsite` app in Teleport, labeled `hosted-on: phall-test`")
 +	require.Contains(t, out, "From your beam `mine`, I connected to `phall-test` through Teleport as `root` and checked nginx: it's *inactive*")
@@ -4614,7 +4614,7 @@ index 00000000000..d906f46db9a
 +	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "livewebsite is down create a zendesk ticket and tell Paul that site is down, fix it please")
 +	require.NoError(t, err)
 +	require.Contains(t, out, "Zendesk ticket #")
-+	require.Contains(t, out, "Sent the service owner a direct message")
++	require.Contains(t, out, "I contacted the service owner on your behalf.")
 +	require.Equal(t, []string{"UPAUL  There's an issue with the live website."}, slack.posts)
 +
 +	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "yes")
