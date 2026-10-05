@@ -565,10 +565,10 @@ index 00000000000..877bad32469
 +}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..dd14b7ff126
+index 00000000000..d044aa6d76e
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,657 @@
+@@ -0,0 +1,660 @@
 +package slack
 +
 +import (
@@ -766,8 +766,11 @@ index 00000000000..dd14b7ff126
 +		switch {
 +		case needsAuthorization(err):
 +			return s.requestAuthorization(channel, threadTS, text)
++		case trace.IsNotFound(err) || trace.IsNotImplemented(err):
++			// No LLM apps on this tenant: every request goes to a beam.
++			logger.Get(ctx).WarnContext(ctx, "Chat is unavailable, using a coding agent in a beam instead", "error", err)
 +		case err != nil:
-+			logger.Get(ctx).WarnContext(ctx, "Chat answer failed, using a coding agent in a beam instead", "error", err)
++			return AskResult{}, trace.Wrap(err, "getting a chat answer from %s", agentDisplayName(agent))
 +		case !handoff:
 +			if err := writeThreadState(threadPath, threadState{agent: agent}); err != nil {
 +				return AskResult{}, trace.Wrap(err)
@@ -1725,10 +1728,10 @@ index 00000000000..9e1c5978d9b
 +}
 diff --git a/integrations/access/slack/beams_chat.go b/integrations/access/slack/beams_chat.go
 new file mode 100644
-index 00000000000..7e3ad70e0c2
+index 00000000000..26e03e88efa
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat.go
-@@ -0,0 +1,289 @@
+@@ -0,0 +1,310 @@
 +package slack
 +
 +import (
@@ -1762,7 +1765,10 @@ index 00000000000..7e3ad70e0c2
 +	// chatHistoryLimit is how many chat messages a thread keeps for context.
 +	chatHistoryLimit = 20
 +	chatMaxTokens    = 1024
-+	chatTimeout      = 2 * time.Minute
++	// chatMaxReasoningTokens leaves reasoning models room to think before
++	// answering.
++	chatMaxReasoningTokens = 4096
++	chatTimeout            = 2 * time.Minute
 +
 +	defaultChatClaudeModel = "claude-sonnet-4-5"
 +	defaultChatCodexModel  = "gpt-5"
@@ -1961,29 +1967,47 @@ index 00000000000..7e3ad70e0c2
 +	return strings.Join(text, ""), nil
 +}
 +
-+// openAIChat calls the Chat Completions API. Teleport replaces the API key.
++// openAIChat calls the Responses API, the route Teleport's OpenAI app serves
++// for every model (Bedrock-hosted OpenAI models are not available on Chat
++// Completions). Teleport replaces the API key.
 +func openAIChat(ctx context.Context, client *http.Client, baseURL, model, system string, messages []chatMessage) (string, error) {
-+	all := append([]chatMessage{{Role: "system", Content: system}}, messages...)
 +	body := map[string]any{
-+		"model":                 model,
-+		"max_completion_tokens": chatMaxTokens,
-+		"messages":              all,
++		"model":        model,
++		"instructions": system,
++		"input":        messages,
++		// Reasoning models spend part of this budget thinking.
++		"max_output_tokens": chatMaxReasoningTokens,
++		"store":             false,
 +	}
 +	headers := map[string]string{"Authorization": "Bearer teleport"}
 +	var resp struct {
-+		Choices []struct {
-+			Message struct {
-+				Content string `json:"content"`
-+			} `json:"message"`
-+		} `json:"choices"`
++		Status string `json:"status"`
++		Output []struct {
++			Type    string `json:"type"`
++			Content []struct {
++				Type string `json:"type"`
++				Text string `json:"text"`
++			} `json:"content"`
++		} `json:"output"`
 +	}
-+	if err := postJSON(ctx, client, baseURL+"/v1/chat/completions", headers, body, &resp); err != nil {
++	if err := postJSON(ctx, client, baseURL+"/v1/responses", headers, body, &resp); err != nil {
 +		return "", trace.Wrap(err)
 +	}
-+	if len(resp.Choices) == 0 {
-+		return "", trace.BadParameter("model returned no answer")
++	var text []string
++	for _, item := range resp.Output {
++		if item.Type != "message" {
++			continue
++		}
++		for _, part := range item.Content {
++			if part.Type == "output_text" {
++				text = append(text, part.Text)
++			}
++		}
 +	}
-+	return resp.Choices[0].Message.Content, nil
++	if len(text) == 0 {
++		return "", trace.BadParameter("model returned no answer (status %q)", resp.Status)
++	}
++	return strings.Join(text, ""), nil
 +}
 +
 +func postJSON(ctx context.Context, client *http.Client, url string, headers map[string]string, body, out any) error {
@@ -2020,10 +2044,10 @@ index 00000000000..7e3ad70e0c2
 +}
 diff --git a/integrations/access/slack/beams_chat_test.go b/integrations/access/slack/beams_chat_test.go
 new file mode 100644
-index 00000000000..f12ef23da6a
+index 00000000000..6f44f52f684
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat_test.go
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,194 @@
 +package slack
 +
 +import (
@@ -2037,6 +2061,7 @@ index 00000000000..f12ef23da6a
 +	"sync"
 +	"testing"
 +
++	"github.com/gravitational/trace"
 +	"github.com/stretchr/testify/require"
 +
 +	"github.com/gravitational/teleport/api/client/proto"
@@ -2114,6 +2139,22 @@ index 00000000000..f12ef23da6a
 +	require.NoError(t, err)
 +	require.Equal(t, agentCodex, chat.calls[len(chat.calls)-1].agent)
 +
++	// A model error is reported instead of starting beam work.
++	failing := runner
++	failing.Chat = func(context.Context, beamsSession, string, []chatMessage) (string, error) {
++		return "", trace.Errorf("model API returned 400 Bad Request: not supported on this route")
++	}
++	_, err = failing.Ask(ctx, "T1", "UALICE", "C1-1700000000.002300", "what should i eat")
++	require.ErrorContains(t, err, "not supported on this route")
++
++	// Without LLM apps, chat falls back to a coding agent in a beam.
++	noApps := runner
++	noApps.Chat = func(context.Context, beamsSession, string, []chatMessage) (string, error) {
++		return "", trace.NotFound("no Teleport LLM app named \"anthropic\"")
++	}
++	_, err = noApps.Ask(ctx, "T1", "UALICE", "C1-1700000000.002400", "what should i eat")
++	require.NoError(t, err)
++
 +	// Naming a beam goes straight to the agent working in it.
 +	before := len(chat.calls)
 +	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.002200", "what's running in mine")
@@ -2142,16 +2183,20 @@ index 00000000000..f12ef23da6a
 +
 +func TestOpenAIChat(t *testing.T) {
 +	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-+		require.Equal(t, "/v1/chat/completions", r.URL.Path)
++		require.Equal(t, "/v1/responses", r.URL.Path)
 +		require.Equal(t, "Bearer teleport", r.Header.Get("Authorization"))
 +		var body struct {
-+			Model    string        `json:"model"`
-+			Messages []chatMessage `json:"messages"`
++			Model        string        `json:"model"`
++			Instructions string        `json:"instructions"`
++			Input        []chatMessage `json:"input"`
++			Store        bool          `json:"store"`
 +		}
 +		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
 +		require.Equal(t, "gpt-test", body.Model)
-+		require.Equal(t, []chatMessage{{Role: "system", Content: "be brief"}, {Role: "user", Content: "hi"}}, body.Messages)
-+		io.WriteString(w, `{"choices":[{"message":{"content":"Hello"}}]}`)
++		require.Equal(t, "be brief", body.Instructions)
++		require.Equal(t, []chatMessage{{Role: "user", Content: "hi"}}, body.Input)
++		require.False(t, body.Store)
++		io.WriteString(w, `{"status":"completed","output":[{"type":"reasoning"},{"type":"message","content":[{"type":"output_text","text":"Hello"}]}]}`)
 +	}))
 +	defer server.Close()
 +
@@ -2159,12 +2204,19 @@ index 00000000000..f12ef23da6a
 +	require.NoError(t, err)
 +	require.Equal(t, "Hello", out)
 +
++	empty := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		io.WriteString(w, `{"status":"incomplete","output":[{"type":"reasoning"}]}`)
++	}))
++	defer empty.Close()
++	_, err = openAIChat(t.Context(), empty.Client(), empty.URL, "gpt-test", "", nil)
++	require.ErrorContains(t, err, `status "incomplete"`)
++
 +	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-+		http.Error(w, `requested model "gpt-test" is not supported`, http.StatusBadRequest)
++		http.Error(w, `model isn't supported on this route`, http.StatusBadRequest)
 +	}))
 +	defer failing.Close()
 +	_, err = openAIChat(t.Context(), failing.Client(), failing.URL, "gpt-test", "", nil)
-+	require.ErrorContains(t, err, "is not supported")
++	require.ErrorContains(t, err, "isn't supported on this route")
 +}
 +
 +type fakeAppLister []types.ResourceWithLabels

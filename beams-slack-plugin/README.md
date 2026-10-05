@@ -188,12 +188,15 @@ running, or testing code, creating files or pages, installing software,
 publishing, or managing beams. Those requests continue in a beam as described
 below, with the chat so far passed to the coding agent as context. Once a
 thread is working in a beam, follow-ups go to the agent in that beam, and
-naming one of your beams always goes straight to it. If the model apps aren't
-available, every request goes to a beam as before.
+naming one of your beams always goes straight to it. If the tenant has no
+model apps, every request goes to a beam as before; if a model call fails, the
+bot reports the error instead of starting work in a beam.
 
 The chat models are set with `chat_claude_model` (default `claude-sonnet-4-5`)
 and `chat_codex_model` (default `gpt-5`); the tenant maps these names to the
-models it serves. `disable_chat = true` turns chat answers off.
+models it serves. Claude chats use the Anthropic Messages API and Codex chats
+the OpenAI Responses API, the routes Teleport's model apps serve for every
+model. `disable_chat = true` turns chat answers off.
 
 ### Work in a beam
 

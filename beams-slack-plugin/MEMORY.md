@@ -246,8 +246,13 @@ injects the real key and maps model names (Bedrock Mantle behind the scenes).
 `tsh proxy app` cannot be used: tbot and delegated certs both carry
 disallow-reissue. A reply of exactly `HANDOFF` sends the request to a beam
 with the chat history in the prompt. History lives in
-`<profile>/threads/<key>.chat` (last 20 messages). Chat errors fall back to
-the beam path. Config: `chat_claude_model`, `chat_codex_model`,
+`<profile>/threads/<key>.chat` (last 20 messages). Only "no LLM app" errors
+(NotFound/NotImplemented) fall back to the beam path; model errors are
+reported. The OpenAI app is Bedrock-backed on the test tenant (`gpt-5` maps
+to `openai.gpt-5.6-luna`), and those models are only served on the Responses
+API, so Codex chat POSTs `/v1/responses` (`instructions`, `input`,
+`max_output_tokens` 4096, `store: false`); Chat Completions returned "isn't
+supported on this route". Config: `chat_claude_model`, `chat_codex_model`,
 `disable_chat`. Not yet verified live: whether the tenant accepts the default
 model names.
 
