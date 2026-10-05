@@ -138,6 +138,10 @@ Teleport Beams Bot connects you and then carries out your original request back
 in the thread where you asked it. This is the same connection `/beams connect`
 makes, and it lasts up to 7 days.
 
+<img src="assets/screenshots/bot-authorize-dm.png" alt="Teleport Beams Bot's direct message with the tsh delegation command, and the user's reply with the session ID (hidden)" width="720">
+
+The tenant name, email, and session ID are hidden in this screenshot.
+
 Questions about which beams you have ("how many beams do I have", "list my
 beams") are answered straight from `tsh beams ls` in a second or two. Anything
 else starts a Claude Code or Codex session in a beam, which usually takes a minute or
