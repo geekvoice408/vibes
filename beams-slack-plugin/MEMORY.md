@@ -312,8 +312,14 @@ true"`, and if not active writes
 `threads/<key>.demo-fix` and offers to start it; the next message in the
 thread ("yes"/"no") consumes it: `systemctl start nginx` (sudo -n if the
 login isn't root), then is-active and `curl -w %{http_code}` of the app URI
-from the server. "notify ... owner" DMs `demo_service_owner` (looked up
-with FindPeople) "There's an issue with the live website." and records them
+from the server. `demoNotifyTarget` reads "notify the service owner",
+"tell Paul that...", "let X know", "DM/message (to) X", "<@ID>" (owner for
+owner/him/her/them; me/us are ignored); it only counts when the message also
+has the website-down phrase or names the owner, so ordinary "tell" requests
+still go to chat. The first demo run said "tell Paul" and got no DM because
+only "owner" was recognised then. `demoRecipient` uses FindPeople and, when
+a name matches several people, picks `demo_service_owner` if among them. It
+DMs `demo_service_owner` or the named person (looked up with FindPeople) "There's an issue with the live website." and records them
 in `threads/<key>.demo-owner`; a successful fix in that thread DMs "The
 issue was resolved." plus the reason (nginx had stopped on <host>, with the
 systemctl status saved in the fix). Runs before delete/list/chat in Handle.

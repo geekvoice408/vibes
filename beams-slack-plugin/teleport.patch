@@ -4094,10 +4094,10 @@ index 00000000000..33be7d765f3
 +}
 diff --git a/integrations/access/slack/beams_demo.go b/integrations/access/slack/beams_demo.go
 new file mode 100644
-index 00000000000..3c7d6864c3a
+index 00000000000..cd8c6c517c0
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo.go
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,364 @@
 +package slack
 +
 +import (
@@ -4120,8 +4120,10 @@ index 00000000000..3c7d6864c3a
 +// where it is logged in as the user, so every step is audited as them.
 +var (
 +	demoTicketRequest = regexp.MustCompile(`(?i)\bzendesk\b.*\btickets?\b|\btickets?\b.*\bzendesk\b`)
-+	demoNotifyOwner   = regexp.MustCompile(`(?i)\b(notify|tell|message|let)\b.*\b(service|site|website|app)?\s*owners?\b`)
-+	demoWebsiteDown   = regexp.MustCompile(`(?i)\blive\s*-?\s*web\s*site\b.*\b(down|not working|broken|unreachable|offline)\b`)
++	// demoNotify finds who to tell about the issue: "notify the service
++	// owner", "tell Paul that...", "let Paul Hall know", "send a DM to Paul".
++	demoNotify      = regexp.MustCompile(`(?i)\b(?:tell|notify|message|dm|ping)\s+(?:to\s+)?(?:the\s+)?(<@[A-Z0-9]+(?:\|[^>]*)?>|[\w.'-]+(?:\s+[\w.'-]+)?)|\blet\s+(<@[A-Z0-9]+(?:\|[^>]*)?>|[\w.'-]+(?:\s+[\w.'-]+)?)\s+know\b`)
++	demoWebsiteDown = regexp.MustCompile(`(?i)\blive\s*-?\s*web\s*site\b.*\b(down|not working|broken|unreachable|offline)\b`)
 +	// yesReply and noReply are whole-message answers to an offer, so "yes,
 +	// but use port 9090" is a change rather than a yes.
 +	yesReply = regexp.MustCompile(`(?i)^\W*(yes|yep|yeah|sure|ok|okay|go ahead|do it|approved?|lgtm|sounds good|start it)(\W+(please|thanks|thank you|go ahead|do it))*\W*$`)
@@ -4204,8 +4206,10 @@ index 00000000000..3c7d6864c3a
 +		}
 +		parts = append(parts, found)
 +	}
-+	if demoNotifyOwner.MatchString(text) {
-+		parts = append(parts, s.demoTellOwner(ctx, threadPath))
++	// Telling someone is part of the skit when it's about the website or its
++	// owner; other "tell" requests are for the bot's usual messaging.
++	if target, owner, ok := demoNotifyTarget(text); ok && (owner || demoWebsiteDown.MatchString(text)) {
++		parts = append(parts, s.demoTellOwner(ctx, threadPath, target))
 +	}
 +	if len(parts) == 0 {
 +		return "", false, nil
@@ -4302,9 +4306,46 @@ index 00000000000..3c7d6864c3a
 +	return fmt.Sprintf("I ran `systemctl start nginx` on `%s`, but nginx is *%s* and the site answered HTTP %s. It needs a closer look.", fix.Host, status, code), false, nil
 +}
 +
-+// demoTellOwner sends the service owner a direct message about the issue.
-+func (s beamsSession) demoTellOwner(ctx context.Context, threadPath string) string {
-+	owner, note := s.demoOwner(ctx)
++// demoNotTargets are words after "tell" that aren't part of a name.
++var demoNotTargets = map[string]bool{
++	"that": true, "there": true, "the": true, "about": true, "it": true, "its": true, "it's": true, "is": true,
++	"we": true, "we're": true, "our": true, "this": true, "and": true, "to": true, "know": true, "site": true,
++	"website": true, "live": true, "livewebsite": true, "issue": true, "service": true, "app": true,
++}
++
++// demoNotifyTarget finds who a request asks to tell about the issue. target
++// is empty for the service owner ("the owner", "them").
++func demoNotifyTarget(text string) (target string, owner, ok bool) {
++	m := demoNotify.FindStringSubmatch(text)
++	if m == nil {
++		return "", false, false
++	}
++	target = cmp.Or(m[1], m[2])
++	if mentionID.MatchString(target) {
++		return target, false, true
++	}
++	words := strings.Fields(target)
++	for _, word := range words {
++		switch strings.ToLower(strings.Trim(word, ".,'")) {
++		case "owner", "owners", "him", "her", "them":
++			return "", true, true
++		case "me", "myself", "us":
++			return "", false, false
++		}
++	}
++	if demoNotTargets[strings.ToLower(words[0])] {
++		return "", false, false
++	}
++	if len(words) > 1 && demoNotTargets[strings.ToLower(words[1])] {
++		words = words[:1]
++	}
++	return strings.Join(words, " "), false, true
++}
++
++// demoTellOwner sends a direct message about the issue to the person the
++// request names, or the service owner.
++func (s beamsSession) demoTellOwner(ctx context.Context, threadPath, target string) string {
++	owner, note := s.demoRecipient(ctx, target)
 +	if owner == nil {
 +		return note
 +	}
@@ -4322,7 +4363,7 @@ index 00000000000..3c7d6864c3a
 +	if err != nil {
 +		logger.Get(ctx).WarnContext(ctx, "Failed to remember the service owner for this thread", "error", err)
 +	}
-+	return fmt.Sprintf("Sent %s, the service owner, a direct message: “%s”", owner.label(), demoIssueMessage)
++	return fmt.Sprintf("Sent %s a direct message: “%s”", owner.label(), demoIssueMessage)
 +}
 +
 +// demoTellOwnerResolved tells the owner told about the issue in this thread
@@ -4346,23 +4387,38 @@ index 00000000000..3c7d6864c3a
 +	return fmt.Sprintf("Let %s know it's resolved, and why it was down.", owner.label())
 +}
 +
-+// demoOwner finds the service owner in Slack.
-+func (s beamsSession) demoOwner(ctx context.Context) (*SlackPerson, string) {
-+	name := s.runner.Config.DemoServiceOwner
++// demoRecipient finds who to message in Slack: the person named, or the
++// service owner. When a name like "Paul" matches several people, the service
++// owner wins if they're one of them.
++func (s beamsSession) demoRecipient(ctx context.Context, target string) (*SlackPerson, string) {
++	ownerName := s.runner.Config.DemoServiceOwner
 +	switch {
-+	case name == "":
++	case target == "" && ownerName == "":
 +		return nil, "I don't know who owns the live website. Set `demo_service_owner` to their Slack name."
 +	case s.runner.FindPeople == nil || s.runner.Post == nil:
 +		return nil, "I can't send Slack messages from here."
 +	}
++	name := cmp.Or(target, ownerName)
 +	people, err := s.runner.FindPeople(ctx, name)
-+	switch {
-+	case err != nil:
++	if err != nil {
 +		return nil, fmt.Sprintf("I couldn't look up %s in Slack: %s", name, trace.UserMessage(err))
-+	case len(people) != 1:
-+		return nil, fmt.Sprintf("I couldn't find exactly one person called %s in Slack, so I didn't message the service owner.", name)
 +	}
-+	return &people[0], ""
++	if len(people) > 1 && target != "" && ownerName != "" {
++		if owners, err := s.runner.FindPeople(ctx, ownerName); err == nil && len(owners) == 1 {
++			for _, p := range people {
++				if p.ID == owners[0].ID {
++					return &p, ""
++				}
++			}
++		}
++	}
++	switch len(people) {
++	case 0:
++		return nil, fmt.Sprintf("I couldn't find anyone in Slack called %s, so I didn't message them.", name)
++	case 1:
++		return &people[0], ""
++	}
++	return nil, fmt.Sprintf("More than one person in Slack matches %s, so I didn't message anyone. Say their full name.", name)
 +}
 +
 +// followThread makes the bot follow a thread, so a plain reply like "yes"
@@ -4408,16 +4464,17 @@ index 00000000000..3c7d6864c3a
 +}
 diff --git a/integrations/access/slack/beams_demo_test.go b/integrations/access/slack/beams_demo_test.go
 new file mode 100644
-index 00000000000..2e4f5355067
+index 00000000000..a6eb0f35e9c
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo_test.go
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,154 @@
 +package slack
 +
 +import (
 +	"context"
 +	"os"
 +	"path/filepath"
++	"strings"
 +	"testing"
 +
 +	"github.com/stretchr/testify/require"
@@ -4462,7 +4519,7 @@ index 00000000000..2e4f5355067
 +		},
 +		MintIdentity: fakeMint,
 +		FindPeople: func(_ context.Context, query string) ([]SlackPerson, error) {
-+			return matchPeople([]SlackPerson{{ID: "UPAUL", Name: "paul", RealName: "Paul Hall"}}, query), nil
++			return matchPeople([]SlackPerson{{ID: "UPAUL", Name: "paul", RealName: "Paul Hall"}, {ID: "UPAUL2", Name: "paulk", RealName: "Paul King"}}, query), nil
 +		},
 +		Post: slack.post,
 +	}
@@ -4477,7 +4534,7 @@ index 00000000000..2e4f5355067
 +
 +	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "the live website is down, notify the service owner there is an issue with their website")
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Sent Paul Hall, the service owner, a direct message: “There's an issue with the live website.”")
++	require.Contains(t, out, "Sent Paul Hall a direct message: “There's an issue with the live website.”")
 +	require.Equal(t, []string{"UPAUL  There's an issue with the live website."}, slack.posts)
 +	require.Contains(t, out, "Found the `livewebsite` app in Teleport, labeled `hosted-on: phall-test`")
 +	require.Contains(t, out, "From your beam `mine`, I connected to `phall-test` through Teleport as `root` and checked nginx: it's *inactive*")
@@ -4507,6 +4564,63 @@ index 00000000000..2e4f5355067
 +	_, ok, err := beamsSession{runner: runner}.demoSkit(ctx, filepath.Join(t.TempDir(), "x"), "create a zendesk ticket", nil, "")
 +	require.NoError(t, err)
 +	require.False(t, ok)
++}
++
++func TestDemoNotifyTarget(t *testing.T) {
++	for text, want := range map[string]struct {
++		target    string
++		owner, ok bool
++	}{
++		"livewebsite is down create a zendesk ticket and tell Paul that site is down, fix it please": {target: "Paul", ok: true},
++		"notify the service owner there is an issue with their website":                              {owner: true, ok: true},
++		"send a DM to Paul Hall about the live website":                                              {target: "Paul Hall", ok: true},
++		"let Paul Hall know the live website is down":                                                {target: "Paul Hall", ok: true},
++		"tell <@UPAUL> the live website is down":                                                     {target: "<@UPAUL>", ok: true},
++		"tell them the live website is down":                                                         {owner: true, ok: true},
++		"tell me if the live website is down":                                                        {},
++		"the live website is down":                                                                   {},
++	} {
++		target, owner, ok := demoNotifyTarget(text)
++		require.Equal(t, want.target, target, text)
++		require.Equal(t, want.owner, owner, text)
++		require.Equal(t, want.ok, ok, text)
++	}
++}
++
++func TestDemoTellsTheNamedPerson(t *testing.T) {
++	tshPath, _ := writeDemoTSH(t)
++	slack := &fakeSlack{}
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:          tshPath,
++			ProfilesDir:      t.TempDir(),
++			BotName:          "teleport-beams-bot",
++			Users:            map[string]string{"UALICE": "alice@example.com"},
++			DemoSkits:        true,
++			DemoServiceOwner: "Paul Hall",
++		},
++		MintIdentity: fakeMint,
++		FindPeople: func(_ context.Context, query string) ([]SlackPerson, error) {
++			return matchPeople([]SlackPerson{{ID: "UPAUL", Name: "paul", RealName: "Paul Hall"}, {ID: "UPAUL2", Name: "paulk", RealName: "Paul King"}}, query), nil
++		},
++		Post: slack.post,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	thread := "C1-1700000000.014000"
++
++	// "Paul" matches two people; the service owner is one of them.
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "livewebsite is down create a zendesk ticket and tell Paul that site is down, fix it please")
++	require.NoError(t, err)
++	require.Contains(t, out, "Zendesk ticket #")
++	require.Contains(t, out, "Sent Paul Hall a direct message")
++	require.Equal(t, []string{"UPAUL  There's an issue with the live website."}, slack.posts)
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "yes")
++	require.NoError(t, err)
++	require.Len(t, slack.posts, 2)
++	require.True(t, strings.HasPrefix(slack.posts[1], "UPAUL  The issue was resolved."))
 +}
 diff --git a/integrations/access/slack/beams_files.go b/integrations/access/slack/beams_files.go
 new file mode 100644

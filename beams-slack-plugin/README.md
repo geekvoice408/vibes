@@ -542,10 +542,12 @@ With `demo_skits = true`, these requests follow a script:
   `demo_ssh_login`, and if nginx is down offers to start it. Reply "yes" in
   the thread and it runs `systemctl start nginx` (with `sudo -n` for a login
   other than root) and checks the app's URL with `curl` from the server.
-- **"notify the service owner"** sends `demo_service_owner` a direct message:
-  "There's an issue with the live website." Once the website is fixed in
-  that thread, they get a second one: "The issue was resolved." and why it
-  was down.
+- **"notify the service owner"**, or "tell Paul…", "let Paul Hall know…",
+  "DM Paul…" alongside the website request, sends that person (or
+  `demo_service_owner`) a direct message: "There's an issue with the live
+  website." When a first name matches several people, the service owner wins
+  if they're one of them. Once the website is fixed in that thread, they get
+  a second one: "The issue was resolved." and why it was down.
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.
