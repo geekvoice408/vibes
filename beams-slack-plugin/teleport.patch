@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..069eaad64f9
+index 00000000000..b0a2d706e0e
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,308 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -114,6 +114,7 @@ index 00000000000..069eaad64f9
 +	PostBeamsReply(ctx context.Context, responseURL, text string) error
 +	LookupEmailByUserID(ctx context.Context, userID string) (string, error)
 +	PostBeamsThreadReply(ctx context.Context, channelID, threadTS, text string) error
++	TeleportClusterName() string
 +}
 +
 +type beamsRunner interface {
@@ -167,6 +168,8 @@ index 00000000000..069eaad64f9
 +		DelegationClient: delegationClient.DelegationSessionServiceClient(),
 +		LookupEmail:      a.bot.LookupEmailByUserID,
 +		Users:            baseApp.APIClient,
++		Apps:             baseApp.APIClient,
++		ClusterName:      a.bot.TeleportClusterName(),
 +	}
 +	return nil
 +}
@@ -388,10 +391,10 @@ index 00000000000..069eaad64f9
 +}
 diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
 new file mode 100644
-index 00000000000..c7fba0aaf79
+index 00000000000..877bad32469
 --- /dev/null
 +++ b/integrations/access/slack/beams_app_test.go
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,168 @@
 +package slack
 +
 +import (
@@ -411,6 +414,7 @@ index 00000000000..c7fba0aaf79
 +}
 +
 +func (b *fakeBeamsBot) GenerateWebSocketURL(context.Context) (string, error) { return "", nil }
++func (b *fakeBeamsBot) TeleportClusterName() string                          { return "example.teleport.sh" }
 +func (b *fakeBeamsBot) PostBeamsReply(context.Context, string, string) error { return nil }
 +func (b *fakeBeamsBot) LookupEmailByUserID(context.Context, string) (string, error) {
 +	return "", nil
@@ -561,10 +565,10 @@ index 00000000000..c7fba0aaf79
 +}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..08a1555dc40
+index 00000000000..dd14b7ff126
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,611 @@
+@@ -0,0 +1,657 @@
 +package slack
 +
 +import (
@@ -580,6 +584,8 @@ index 00000000000..08a1555dc40
 +	"time"
 +
 +	"github.com/gravitational/trace"
++
++	"github.com/gravitational/teleport/integrations/lib/logger"
 +)
 +
 +// botActionPrefix marks lines in Claude's reply that ask the plugin to act
@@ -751,6 +757,27 @@ index 00000000000..08a1555dc40
 +		agent = requested
 +		notes = append(notes, fmt.Sprintf("Using %s for this thread.", agentDisplayName(agent)))
 +	}
++	// Threads that haven't started work in a beam are answered by the model
++	// directly through Teleport's LLM app, as the user: quick, no beam, and
++	// audited. The model hands off requests that need a computer.
++	var chatHistory []chatMessage
++	if thread.beam == "" && r.chatEnabled() && !namesBeam(beams, text) {
++		reply, handoff, history, err := s.chatTurn(ctx, chatHistoryPath(threadsDir, threadKey), agent, text)
++		switch {
++		case needsAuthorization(err):
++			return s.requestAuthorization(channel, threadTS, text)
++		case err != nil:
++			logger.Get(ctx).WarnContext(ctx, "Chat answer failed, using a coding agent in a beam instead", "error", err)
++		case !handoff:
++			if err := writeThreadState(threadPath, threadState{agent: agent}); err != nil {
++				return AskResult{}, trace.Wrap(err)
++			}
++			return AskResult{Reply: truncateSlackOutput(strings.Join(append(notes, reply), "\n\n"))}, nil
++		default:
++			chatHistory = history
++		}
++	}
++
 +	name, continued := chooseBeam(beams, thread.beam, text)
 +	// Only continue a conversation the same agent already has in this beam.
 +	if name != thread.beam || thread.fresh || agent != thread.agent {
@@ -776,7 +803,7 @@ index 00000000000..08a1555dc40
 +	if continued {
 +		agentArgs = append(agentArgs, "--continue")
 +	}
-+	agentArgs = append(agentArgs, botPrompt(name, s.username, created, text))
++	agentArgs = append(agentArgs, botPrompt(name, s.username, created, chatContext(chatHistory), text))
 +	run := s.claude
 +	if agent == agentCodex {
 +		run = s.codex
@@ -848,8 +875,8 @@ index 00000000000..08a1555dc40
 +	agent string
 +}
 +
-+// readThreadState parses "<beam> [new] [claude|codex]". Older files without
-+// an agent used Claude.
++// readThreadState parses "<beam> [new] [claude|codex]", where beam "-" means
++// a chat thread with no beam yet. Older files without an agent used Claude.
 +func readThreadState(path string) threadState {
 +	state := threadState{agent: agentClaude}
 +	data, err := os.ReadFile(path)
@@ -857,7 +884,7 @@ index 00000000000..08a1555dc40
 +		return state
 +	}
 +	fields := strings.Fields(string(data))
-+	if len(fields) > 0 {
++	if len(fields) > 0 && fields[0] != "-" {
 +		state.beam = fields[0]
 +	}
 +	for _, field := range fields[min(1, len(fields)):] {
@@ -872,11 +899,9 @@ index 00000000000..08a1555dc40
 +}
 +
 +func writeThreadState(path string, state threadState) error {
-+	if state.beam == "" {
-+		// No beam yet: keep the file so replies still count as follow-ups.
-+		return trace.Wrap(os.WriteFile(path, nil, 0o600))
-+	}
-+	fields := []string{state.beam}
++	// A thread with no beam yet keeps its file, so replies still count as
++	// follow-ups, and remembers its agent.
++	fields := []string{cmp.Or(state.beam, "-")}
 +	if state.fresh {
 +		fields = append(fields, "new")
 +	}
@@ -899,12 +924,14 @@ index 00000000000..08a1555dc40
 +		return nil, false
 +	}
 +	known := map[string]bool{}
++	var all []string
 +	for _, beam := range beams {
 +		if id, _ := beam["id"].(string); id != "" {
 +			known[id] = true
++			all = append(all, id)
 +		}
 +	}
-+	thisBeam, beamWord := false, false
++	thisBeam, beamWord, allWord := false, false, false
 +	for _, word := range strings.Fields(text[loc[1]:]) {
 +		word = strings.Trim(word, ",.!?;:`'\"*_")
 +		switch lower := strings.ToLower(word); {
@@ -917,12 +944,18 @@ index 00000000000..08a1555dc40
 +			thisBeam = true
 +		case lower == "beams":
 +			beamWord = true
-+		case lower == "the" || lower == "my" || lower == "and" || lower == "both" || lower == "please" || lower == "":
++		case lower == "all" || lower == "every":
++			allWord = true
++		case lower == "the" || lower == "my" || lower == "of" || lower == "and" || lower == "both" || lower == "please" || lower == "":
 +		default:
 +			if len(names) == 0 && !beamWord && !thisBeam {
 +				return nil, false
 +			}
 +		}
++	}
++	// "delete all my beams" deletes every beam the user owns.
++	if len(names) == 0 && allWord && beamWord {
++		return all, true
 +	}
 +	if len(names) == 0 && thisBeam && threadBeam != "" && known[threadBeam] {
 +		names = []string{threadBeam}
@@ -1083,6 +1116,16 @@ index 00000000000..08a1555dc40
 +	return fmt.Sprintf("%d %ss", n, unit)
 +}
 +
++// namesBeam reports whether text mentions one of the user's beams by name.
++func namesBeam(beams []map[string]any, text string) bool {
++	for _, beam := range beams {
++		if id, _ := beam["id"].(string); id != "" && strings.Contains(text, id) {
++			return true
++		}
++	}
++	return false
++}
++
 +// chooseBeam picks the beam for a request: the thread's beam, a beam named in
 +// the request, or the user's newest beam. continued reports whether the
 +// thread already has a Claude conversation in that beam.
@@ -1109,7 +1152,7 @@ index 00000000000..08a1555dc40
 +	return newest, false
 +}
 +
-+func botPrompt(beam, username string, created bool, request string) string {
++func botPrompt(beam, username string, created bool, earlier, request string) string {
 +	var b strings.Builder
 +	fmt.Fprintf(&b, "You are the Teleport Beams Bot, a Slack assistant working inside the Teleport Beam %q, an ephemeral Debian runtime, on behalf of %s.", beam, username)
 +	if created {
@@ -1123,8 +1166,15 @@ index 00000000000..08a1555dc40
 +` + botActionPrefix + ` unpublish
 +` + botActionPrefix + ` create_beam
 +Only request create_beam if the user explicitly asks for an additional beam.
++The Slack bot deletes beams itself: if the user asks to delete beams, tell them to say "delete" followed by the beam names, or "delete all my beams".
 +
-+Request: `)
++`)
++	if earlier != "" {
++		b.WriteString("Earlier in this Slack conversation:\n")
++		b.WriteString(earlier)
++		b.WriteString("\n")
++	}
++	b.WriteString("Request: ")
 +	b.WriteString(request)
 +	return b.String()
 +}
@@ -1178,10 +1228,10 @@ index 00000000000..08a1555dc40
 +}
 diff --git a/integrations/access/slack/beams_bot_test.go b/integrations/access/slack/beams_bot_test.go
 new file mode 100644
-index 00000000000..423e40a176f
+index 00000000000..9e1c5978d9b
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot_test.go
-@@ -0,0 +1,487 @@
+@@ -0,0 +1,491 @@
 +package slack
 +
 +import (
@@ -1588,6 +1638,10 @@ index 00000000000..423e40a176f
 +		{text: "delete this beam", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
 +		{text: "get rid of it", thread: "mint-arc", names: []string{"mint-arc"}, ok: true},
 +		{text: "delete my beams", ok: true},
++		{text: "delete all my beams", names: []string{"curious-shield", "mint-arc"}, ok: true},
++		{text: "please delete all of my beams.", names: []string{"curious-shield", "mint-arc"}, ok: true},
++		{text: "delete all the files in mint-arc"},
++		{text: "delete all"},
 +		{text: "delete this beam", ok: true},
 +		{text: "remove the background from the page in mint-arc"},
 +		{text: "make a page and delete the old one"},
@@ -1669,12 +1723,479 @@ index 00000000000..423e40a176f
 +	require.Contains(t, res.Reply, "Built the page.")
 +	require.True(t, runner.Connected("T1", "UALICE"))
 +}
+diff --git a/integrations/access/slack/beams_chat.go b/integrations/access/slack/beams_chat.go
+new file mode 100644
+index 00000000000..7e3ad70e0c2
+--- /dev/null
++++ b/integrations/access/slack/beams_chat.go
+@@ -0,0 +1,289 @@
++package slack
++
++import (
++	"bytes"
++	"cmp"
++	"context"
++	"crypto/tls"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++
++	"github.com/gravitational/trace"
++
++	"github.com/gravitational/teleport/api/client/proto"
++	delegationv1 "github.com/gravitational/teleport/api/gen/proto/go/teleport/delegation/v1"
++	"github.com/gravitational/teleport/api/types"
++	"github.com/gravitational/teleport/api/utils/keys"
++)
++
++const (
++	// llmAppLabel marks the Teleport apps that proxy model APIs for beams.
++	llmAppLabel = "teleport.internal/beams/app-type"
++	// chatHandoff is the reply that means a request needs a coding agent in a
++	// beam rather than a chat answer.
++	chatHandoff = "HANDOFF"
++	// chatHistoryLimit is how many chat messages a thread keeps for context.
++	chatHistoryLimit = 20
++	chatMaxTokens    = 1024
++	chatTimeout      = 2 * time.Minute
++
++	defaultChatClaudeModel = "claude-sonnet-4-5"
++	defaultChatCodexModel  = "gpt-5"
++)
++
++// appLister lists Teleport resources; the plugin's Teleport client satisfies it.
++type appLister interface {
++	ListResources(ctx context.Context, req proto.ListResourcesRequest) (*types.ListResourcesResponse, error)
++}
++
++// llmApp is a Teleport app that proxies a model provider's API. Teleport adds
++// the provider credentials and records every request in the audit log.
++type llmApp struct {
++	Name       string
++	PublicAddr string
++}
++
++// chatMessage is one turn of a chat thread.
++type chatMessage struct {
++	Role    string `json:"role"`
++	Content string `json:"content"`
++}
++
++func (r BeamsCommandRunner) chatEnabled() bool {
++	return !r.Config.DisableChat && (r.Apps != nil || r.Chat != nil)
++}
++
++// chatSystemPrompt tells the model to answer conversational requests and hand
++// anything that needs a computer to a coding agent in a beam.
++func chatSystemPrompt(username string) string {
++	return fmt.Sprintf(`You are Teleport Beams Bot, a friendly assistant in Slack, talking with %s. Answer conversationally and concisely, using Slack formatting (*bold*, _italic_, `+"`code`"+`, and • for bullets).
++
++Some requests need a computer: writing, running, or testing code; creating or editing files, webpages, or apps; installing software; publishing something; or creating, listing, or deleting Teleport Beams. For those, reply with exactly %s and nothing else, and a coding agent in a beam will take over. Short code snippets inside an answer are fine; hand off only when something has to be built, run, or saved.`, username, chatHandoff)
++}
++
++// chatTurn answers a request in a chat thread. It returns handoff when the
++// request needs a coding agent in a beam instead, along with the earlier
++// conversation so the agent has context.
++func (s beamsSession) chatTurn(ctx context.Context, historyPath, agent, text string) (reply string, handoff bool, history []chatMessage, err error) {
++	history = readChatHistory(historyPath)
++	messages := append(append([]chatMessage{}, history...), chatMessage{Role: "user", Content: text})
++
++	chat := s.runner.Chat
++	if chat == nil {
++		chat = s.callLLMApp
++	}
++	reply, err = chat(ctx, s, agent, messages)
++	if err != nil {
++		return "", false, history, trace.Wrap(err)
++	}
++	reply = strings.TrimSpace(reply)
++	if strings.HasPrefix(reply, chatHandoff) {
++		return "", true, history, nil
++	}
++
++	messages = append(messages, chatMessage{Role: "assistant", Content: reply})
++	if len(messages) > chatHistoryLimit {
++		messages = messages[len(messages)-chatHistoryLimit:]
++	}
++	if err := writeChatHistory(historyPath, messages); err != nil {
++		return "", false, history, trace.Wrap(err)
++	}
++	return reply, false, history, nil
++}
++
++func readChatHistory(path string) []chatMessage {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return nil
++	}
++	var history []chatMessage
++	if json.Unmarshal(data, &history) != nil {
++		return nil
++	}
++	return history
++}
++
++func writeChatHistory(path string, messages []chatMessage) error {
++	data, err := json.Marshal(messages)
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	return trace.Wrap(os.WriteFile(path, data, 0o600))
++}
++
++// chatContext renders earlier chat turns for a coding agent's prompt.
++func chatContext(history []chatMessage) string {
++	var b strings.Builder
++	for _, m := range history {
++		fmt.Fprintf(&b, "%s: %s\n", m.Role, m.Content)
++	}
++	return b.String()
++}
++
++// callLLMApp sends the chat to the Teleport LLM app for the agent, as the
++// user: the delegation API mints a certificate for the app and starts an app
++// session, so Teleport attributes and audits the request.
++func (s beamsSession) callLLMApp(ctx context.Context, _ beamsSession, agent string, messages []chatMessage) (string, error) {
++	appName := "anthropic"
++	if agent == agentCodex {
++		appName = "openai"
++	}
++	app, err := s.runner.findLLMApp(ctx, appName)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	cert, err := s.appCertificate(ctx, app)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	client := &http.Client{
++		Timeout:   chatTimeout,
++		Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}}},
++	}
++	baseURL := "https://" + app.PublicAddr
++	system := chatSystemPrompt(s.username)
++	if agent == agentCodex {
++		return openAIChat(ctx, client, baseURL, cmp.Or(s.runner.Config.ChatCodexModel, defaultChatCodexModel), system, messages)
++	}
++	return anthropicChat(ctx, client, baseURL, cmp.Or(s.runner.Config.ChatClaudeModel, defaultChatClaudeModel), system, messages)
++}
++
++// findLLMApp looks up a Teleport LLM app by name.
++func (r BeamsCommandRunner) findLLMApp(ctx context.Context, name string) (llmApp, error) {
++	if r.Apps == nil {
++		return llmApp{}, trace.NotImplemented("no Teleport client for listing apps")
++	}
++	resp, err := r.Apps.ListResources(ctx, proto.ListResourcesRequest{
++		ResourceType: types.KindAppServer,
++		Labels:       map[string]string{llmAppLabel: "llm"},
++		Limit:        50,
++	})
++	if err != nil {
++		return llmApp{}, trace.Wrap(err)
++	}
++	for _, resource := range resp.Resources {
++		server, ok := resource.(types.AppServer)
++		if !ok {
++			continue
++		}
++		if app := server.GetApp(); app.GetName() == name {
++			return llmApp{Name: app.GetName(), PublicAddr: app.GetPublicAddr()}, nil
++		}
++	}
++	return llmApp{}, trace.NotFound("no Teleport LLM app named %q", name)
++}
++
++// appCertificate mints a TLS client certificate for the app as the user.
++func (s beamsSession) appCertificate(ctx context.Context, app llmApp) (tls.Certificate, error) {
++	if s.delegation == "" {
++		return tls.Certificate{}, &needsAuthorizationError{trace.AccessDenied("not connected")}
++	}
++	privateKey, response, err := s.runner.mintDelegatedCerts(ctx, s.delegation, s.username, &delegationv1.RouteToApp{
++		Name:        app.Name,
++		PublicAddr:  app.PublicAddr,
++		ClusterName: s.runner.ClusterName,
++	})
++	if trace.IsAccessDenied(err) || trace.IsNotFound(err) {
++		return tls.Certificate{}, &needsAuthorizationError{err}
++	}
++	if err != nil {
++		return tls.Certificate{}, trace.Wrap(err)
++	}
++	keyPEM, err := keys.MarshalPrivateKey(privateKey)
++	if err != nil {
++		return tls.Certificate{}, trace.Wrap(err)
++	}
++	cert, err := tls.X509KeyPair(response.GetTls(), keyPEM)
++	return cert, trace.Wrap(err)
++}
++
++// anthropicChat calls the Messages API. Teleport replaces the API key.
++func anthropicChat(ctx context.Context, client *http.Client, baseURL, model, system string, messages []chatMessage) (string, error) {
++	body := map[string]any{
++		"model":      model,
++		"max_tokens": chatMaxTokens,
++		"system":     system,
++		"messages":   messages,
++	}
++	headers := map[string]string{"x-api-key": "teleport", "anthropic-version": "2023-06-01"}
++	var resp struct {
++		Content []struct {
++			Type string `json:"type"`
++			Text string `json:"text"`
++		} `json:"content"`
++	}
++	if err := postJSON(ctx, client, baseURL+"/v1/messages", headers, body, &resp); err != nil {
++		return "", trace.Wrap(err)
++	}
++	var text []string
++	for _, block := range resp.Content {
++		if block.Type == "text" {
++			text = append(text, block.Text)
++		}
++	}
++	return strings.Join(text, ""), nil
++}
++
++// openAIChat calls the Chat Completions API. Teleport replaces the API key.
++func openAIChat(ctx context.Context, client *http.Client, baseURL, model, system string, messages []chatMessage) (string, error) {
++	all := append([]chatMessage{{Role: "system", Content: system}}, messages...)
++	body := map[string]any{
++		"model":                 model,
++		"max_completion_tokens": chatMaxTokens,
++		"messages":              all,
++	}
++	headers := map[string]string{"Authorization": "Bearer teleport"}
++	var resp struct {
++		Choices []struct {
++			Message struct {
++				Content string `json:"content"`
++			} `json:"message"`
++		} `json:"choices"`
++	}
++	if err := postJSON(ctx, client, baseURL+"/v1/chat/completions", headers, body, &resp); err != nil {
++		return "", trace.Wrap(err)
++	}
++	if len(resp.Choices) == 0 {
++		return "", trace.BadParameter("model returned no answer")
++	}
++	return resp.Choices[0].Message.Content, nil
++}
++
++func postJSON(ctx context.Context, client *http.Client, url string, headers map[string]string, body, out any) error {
++	payload, err := json.Marshal(body)
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	req.Header.Set("content-type", "application/json")
++	for k, v := range headers {
++		req.Header.Set(k, v)
++	}
++	resp, err := client.Do(req)
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	defer resp.Body.Close()
++	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
++	if err != nil {
++		return trace.Wrap(err)
++	}
++	if resp.StatusCode != http.StatusOK {
++		return trace.Errorf("model API returned %s: %s", resp.Status, strings.TrimSpace(string(data[:min(len(data), 500)])))
++	}
++	return trace.Wrap(json.Unmarshal(data, out))
++}
++
++// chatHistoryPath is where a thread's chat messages are kept.
++func chatHistoryPath(threadsDir, threadKey string) string {
++	return filepath.Join(threadsDir, threadKey+".chat")
++}
+diff --git a/integrations/access/slack/beams_chat_test.go b/integrations/access/slack/beams_chat_test.go
+new file mode 100644
+index 00000000000..f12ef23da6a
+--- /dev/null
++++ b/integrations/access/slack/beams_chat_test.go
+@@ -0,0 +1,166 @@
++package slack
++
++import (
++	"context"
++	"encoding/json"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"strings"
++	"sync"
++	"testing"
++
++	"github.com/stretchr/testify/require"
++
++	"github.com/gravitational/teleport/api/client/proto"
++	"github.com/gravitational/teleport/api/types"
++)
++
++// fakeChat answers lunch-style questions and hands off anything to build.
++type fakeChat struct {
++	mu    sync.Mutex
++	calls []struct {
++		agent    string
++		messages []chatMessage
++	}
++}
++
++func (f *fakeChat) chat(_ context.Context, _ beamsSession, agent string, messages []chatMessage) (string, error) {
++	f.mu.Lock()
++	defer f.mu.Unlock()
++	f.calls = append(f.calls, struct {
++		agent    string
++		messages []chatMessage
++	}{agent, messages})
++	if strings.Contains(messages[len(messages)-1].Content, "webpage") {
++		return chatHandoff, nil
++	}
++	return "Try the pho place.", nil
++}
++
++func TestBotChatAnswersWithoutBeam(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	chat := &fakeChat{}
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++		Chat:         chat.chat,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	thread := "C1-1700000000.002000"
++
++	// A conversational question is answered directly, without a beam.
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "what should i eat for lunch")
++	require.NoError(t, err)
++	require.Equal(t, "Try the pho place.", out)
++	require.True(t, runner.FollowsThread("T1", "UALICE", thread))
++
++	// Follow-ups carry the conversation.
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "what about dinner")
++	require.NoError(t, err)
++	require.Len(t, chat.calls[1].messages, 3)
++	require.Equal(t, "assistant", chat.calls[1].messages[1].Role)
++
++	calls, err := os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.NotContains(t, string(calls), "beams exec", "chat answers must not start a coding agent")
++
++	// A request to build something is handed to a coding agent in a beam,
++	// with the chat so far as context.
++	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "make a webpage about it")
++	require.NoError(t, err)
++	calls, err = os.ReadFile(logPath)
++	require.NoError(t, err)
++	require.Contains(t, string(calls), "beams exec mine")
++	require.Contains(t, string(calls), "Earlier in this Slack conversation:")
++	require.Contains(t, string(calls), "user: what should i eat for lunch")
++
++	// "use codex" chats through the OpenAI app.
++	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.002100", "what should i eat for lunch, use codex")
++	require.NoError(t, err)
++	require.Equal(t, agentCodex, chat.calls[len(chat.calls)-1].agent)
++
++	// Naming a beam goes straight to the agent working in it.
++	before := len(chat.calls)
++	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.002200", "what's running in mine")
++	require.NoError(t, err)
++	require.Len(t, chat.calls, before)
++}
++
++func TestAnthropicChat(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		require.Equal(t, "/v1/messages", r.URL.Path)
++		require.Equal(t, "teleport", r.Header.Get("x-api-key"))
++		require.Equal(t, "2023-06-01", r.Header.Get("anthropic-version"))
++		var body map[string]any
++		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
++		require.Equal(t, "claude-test", body["model"])
++		require.Equal(t, "be brief", body["system"])
++		require.Len(t, body["messages"], 1)
++		io.WriteString(w, `{"content":[{"type":"text","text":"Hello"},{"type":"text","text":" there"}]}`)
++	}))
++	defer server.Close()
++
++	out, err := anthropicChat(t.Context(), server.Client(), server.URL, "claude-test", "be brief", []chatMessage{{Role: "user", Content: "hi"}})
++	require.NoError(t, err)
++	require.Equal(t, "Hello there", out)
++}
++
++func TestOpenAIChat(t *testing.T) {
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		require.Equal(t, "/v1/chat/completions", r.URL.Path)
++		require.Equal(t, "Bearer teleport", r.Header.Get("Authorization"))
++		var body struct {
++			Model    string        `json:"model"`
++			Messages []chatMessage `json:"messages"`
++		}
++		require.NoError(t, json.NewDecoder(r.Body).Decode(&body))
++		require.Equal(t, "gpt-test", body.Model)
++		require.Equal(t, []chatMessage{{Role: "system", Content: "be brief"}, {Role: "user", Content: "hi"}}, body.Messages)
++		io.WriteString(w, `{"choices":[{"message":{"content":"Hello"}}]}`)
++	}))
++	defer server.Close()
++
++	out, err := openAIChat(t.Context(), server.Client(), server.URL, "gpt-test", "be brief", []chatMessage{{Role: "user", Content: "hi"}})
++	require.NoError(t, err)
++	require.Equal(t, "Hello", out)
++
++	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		http.Error(w, `requested model "gpt-test" is not supported`, http.StatusBadRequest)
++	}))
++	defer failing.Close()
++	_, err = openAIChat(t.Context(), failing.Client(), failing.URL, "gpt-test", "", nil)
++	require.ErrorContains(t, err, "is not supported")
++}
++
++type fakeAppLister []types.ResourceWithLabels
++
++func (f fakeAppLister) ListResources(_ context.Context, req proto.ListResourcesRequest) (*types.ListResourcesResponse, error) {
++	return &types.ListResourcesResponse{Resources: f}, nil
++}
++
++func TestFindLLMApp(t *testing.T) {
++	var servers fakeAppLister
++	for _, name := range []string{"anthropic", "openai"} {
++		app, err := types.NewAppV3(types.Metadata{Name: name, Labels: map[string]string{llmAppLabel: "llm"}},
++			types.AppSpecV3{URI: "http://localhost", PublicAddr: name + ".example.teleport.sh"})
++		require.NoError(t, err)
++		server, err := types.NewAppServerV3FromApp(app, "host", "host-id")
++		require.NoError(t, err)
++		servers = append(servers, server)
++	}
++	runner := BeamsCommandRunner{Apps: servers}
++	app, err := runner.findLLMApp(t.Context(), "openai")
++	require.NoError(t, err)
++	require.Equal(t, llmApp{Name: "openai", PublicAddr: "openai.example.teleport.sh"}, app)
++	_, err = runner.findLLMApp(t.Context(), "gemini")
++	require.Error(t, err)
++}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..a2936992983
+index 00000000000..28c96c6a790
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,701 @@
+@@ -0,0 +1,723 @@
 +package slack
 +
 +import (
@@ -1738,6 +2259,14 @@ index 00000000000..a2936992983
 +	// MintIdentity writes a delegated identity for a session to path. It
 +	// defaults to minting through DelegationClient; tests replace it.
 +	MintIdentity func(ctx context.Context, sessionID, username, path string) error
++	// Apps lists Teleport apps, used to find the LLM apps that chat answers
++	// go through. Chat is off when both Apps and Chat are nil.
++	Apps appLister
++	// ClusterName is the Teleport cluster the LLM apps belong to.
++	ClusterName string
++	// Chat answers a chat turn as the user. It defaults to calling the
++	// Teleport LLM app for the agent; tests replace it.
++	Chat func(ctx context.Context, s beamsSession, agent string, messages []chatMessage) (string, error)
 +}
 +
 +// beamsSession is the per-command execution context for one Slack user.
@@ -2287,47 +2816,61 @@ index 00000000000..a2936992983
 +	)
 +}
 +
-+func (r BeamsCommandRunner) generateDelegatedIdentity(ctx context.Context, sessionID, username, identityPath string) error {
++// mintDelegatedCerts asks the delegation API for certificates for the user
++// behind sessionID, optionally routed to an app, and checks they were issued
++// for username.
++func (r BeamsCommandRunner) mintDelegatedCerts(ctx context.Context, sessionID, username string, app *delegationv1.RouteToApp) (*rsa.PrivateKey, *delegationv1.GenerateCertsResponse, error) {
 +	if r.DelegationClient == nil {
-+		return trace.BadParameter("delegation client is not configured")
++		return nil, nil, trace.BadParameter("delegation client is not configured")
 +	}
 +	ttl, err := time.ParseDuration(r.Config.IdentityTTL)
 +	if err != nil {
-+		return trace.BadParameter("invalid beams.identity_ttl: %v", err)
++		return nil, nil, trace.BadParameter("invalid beams.identity_ttl: %v", err)
 +	}
 +	if ttl <= 0 || ttl > time.Hour {
-+		return trace.BadParameter("beams.identity_ttl must be between 1s and 1h")
++		return nil, nil, trace.BadParameter("beams.identity_ttl must be between 1s and 1h")
 +	}
 +
 +	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 +	if err != nil {
-+		return trace.Wrap(err)
++		return nil, nil, trace.Wrap(err)
 +	}
 +	sshPublicKey, err := ssh.NewPublicKey(privateKey.Public())
 +	if err != nil {
-+		return trace.Wrap(err)
++		return nil, nil, trace.Wrap(err)
 +	}
 +	tlsPublicKey, err := keys.MarshalPublicKey(privateKey.Public())
 +	if err != nil {
-+		return trace.Wrap(err)
++		return nil, nil, trace.Wrap(err)
 +	}
-+	response, err := r.DelegationClient.GenerateCerts(ctx, &delegationv1.GenerateCertsRequest{
++	req := &delegationv1.GenerateCertsRequest{
 +		DelegationSessionId: sessionID,
 +		SshPublicKey:        ssh.MarshalAuthorizedKey(sshPublicKey),
 +		TlsPublicKey:        tlsPublicKey,
 +		Ttl:                 durationpb.New(ttl),
-+	})
++	}
++	if app != nil {
++		req.Routing = &delegationv1.GenerateCertsRequest_RouteToApp{RouteToApp: app}
++	}
++	response, err := r.DelegationClient.GenerateCerts(ctx, req)
 +	if err != nil {
-+		return trace.Wrap(err)
++		return nil, nil, trace.Wrap(err)
 +	}
 +	certificate, _, err := keys.X509Certificate(response.GetTls())
 +	if err != nil {
-+		return trace.Wrap(err)
++		return nil, nil, trace.Wrap(err)
 +	}
 +	if certificate.Subject.CommonName != username {
-+		return trace.AccessDenied("delegation session belongs to %q, expected %q", certificate.Subject.CommonName, username)
++		return nil, nil, trace.AccessDenied("delegation session belongs to %q, expected %q", certificate.Subject.CommonName, username)
 +	}
++	return privateKey, response, nil
++}
 +
++func (r BeamsCommandRunner) generateDelegatedIdentity(ctx context.Context, sessionID, username, identityPath string) error {
++	privateKey, response, err := r.mintDelegatedCerts(ctx, sessionID, username, nil)
++	if err != nil {
++		return trace.Wrap(err)
++	}
 +	privateKeyPEM, err := keys.MarshalPrivateKey(privateKey)
 +	if err != nil {
 +		return trace.Wrap(err)
@@ -2631,7 +3174,7 @@ index 00000000000..304bc30ad28
 +	require.Equal(t, "3\n", string(attempts))
 +}
 diff --git a/integrations/access/slack/bot.go b/integrations/access/slack/bot.go
-index d0abf811e9a..b48a4703dd4 100644
+index d0abf811e9a..4f337aa8a1c 100644
 --- a/integrations/access/slack/bot.go
 +++ b/integrations/access/slack/bot.go
 @@ -19,11 +19,15 @@
@@ -2668,7 +3211,7 @@ index d0abf811e9a..b48a4703dd4 100644
  	return apps
  }
  
-@@ -235,6 +243,51 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
+@@ -235,6 +243,57 @@ func (b Bot) PostReviewErrorReply(ctx context.Context, channelID, userID string,
  	return trace.Wrap(err)
  }
  
@@ -2706,6 +3249,12 @@ index d0abf811e9a..b48a4703dd4 100644
 +		return trace.Errorf("Slack response URL returned %s: %s", resp.Status, strings.TrimSpace(string(responseBody)))
 +	}
 +	return nil
++}
++
++// TeleportClusterName returns the name of the Teleport cluster the plugin
++// is connected to.
++func (b Bot) TeleportClusterName() string {
++	return b.clusterName
 +}
 +
 +// PostBeamsThreadReply posts a message in a Slack thread.
@@ -2773,7 +3322,7 @@ index a8ecf146bf6..bd8486f3636 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..ed3896242a4 100644
+index e27fd004c15..320c95047f0 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -2785,7 +3334,7 @@ index e27fd004c15..ed3896242a4 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,38 @@ type Config struct {
+@@ -39,12 +41,44 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -2811,10 +3360,16 @@ index e27fd004c15..ed3896242a4 100644
 +	ClaudeArgs    []string `toml:"claude_args"`
 +	// CodexTimeout bounds /beams codex runs. CodexArgs replaces the default
 +	// extra Codex flags.
-+	CodexTimeout  string   `toml:"codex_timeout"`
-+	CodexArgs     []string `toml:"codex_args"`
-+	BotName       string   `toml:"bot_name"`
-+	DelegationTTL string   `toml:"delegation_ttl"`
++	CodexTimeout string   `toml:"codex_timeout"`
++	CodexArgs    []string `toml:"codex_args"`
++	// ChatClaudeModel and ChatCodexModel are the models used for quick chat
++	// answers through the Teleport LLM apps. DisableChat sends every request
++	// to a coding agent in a beam instead.
++	ChatClaudeModel string `toml:"chat_claude_model"`
++	ChatCodexModel  string `toml:"chat_codex_model"`
++	DisableChat     bool   `toml:"disable_chat"`
++	BotName         string `toml:"bot_name"`
++	DelegationTTL   string `toml:"delegation_ttl"`
 +	// RequiredRole authorizes Slack users whose email matches a Teleport user
 +	// holding this role. Users lists explicit Slack ID overrides.
 +	RequiredRole string            `toml:"required_role"`
@@ -2824,7 +3379,7 @@ index e27fd004c15..ed3896242a4 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +159,43 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +165,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -2868,7 +3423,7 @@ index e27fd004c15..ed3896242a4 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +266,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +272,7 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

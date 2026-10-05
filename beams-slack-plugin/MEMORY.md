@@ -235,11 +235,31 @@ DM the instructions are the reply itself. "On it" is skipped while the user
 is not connected (`Connected`). The `tsh delegation create-session` command
 includes `--user=<resolved Teleport username>`.
 
+Chat answers (`beams_chat.go`): in threads with no beam yet (thread file beam
+`-`), and when no beam is named, `chatTurn` asks the model first. `callLLMApp`
+finds the `anthropic`/`openai` app (`ListResources` on app servers labelled
+`teleport.internal/beams/app-type=llm`), mints an app certificate as the user
+with delegation `GenerateCerts` + `RouteToApp` (this starts an audited app
+session for the user via the bot), and POSTs to `https://<public_addr>/v1/messages`
+(`x-api-key: teleport`) or `/v1/chat/completions` (`Bearer teleport`); Teleport
+injects the real key and maps model names (Bedrock Mantle behind the scenes).
+`tsh proxy app` cannot be used: tbot and delegated certs both carry
+disallow-reissue. A reply of exactly `HANDOFF` sends the request to a beam
+with the chat history in the prompt. History lives in
+`<profile>/threads/<key>.chat` (last 20 messages). Chat errors fall back to
+the beam path. Config: `chat_claude_model`, `chat_codex_model`,
+`disable_chat`. Not yet verified live: whether the tenant accepts the default
+model names.
+
+"delete all my beams" deletes every beam the user owns (`removeTargets` needs
+"all"/"every" plus "beams").
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text
 /var/lib/teleport-slack/beams/<slack-team-id>/<slack-user-id>/
   delegation-session   delegation session ID after /beams connect
+  threads/<ch>-<ts>.chat  chat messages for threads answered without a beam
   threads/<ch>-<ts>    beam used by each bot thread ("<beam> new" = no Claude conversation yet)
   pending-request      request (with its channel and thread) waiting for the user to authorize the bot
   identity-*           temp delegated identities, deleted after each command

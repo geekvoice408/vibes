@@ -54,6 +54,9 @@ Here's what you can do, right in Slack:
 
   <img src="assets/screenshots/bot-ask-thread.png" alt="Teleport Beams Bot replies in the thread that it is working in the user's beam" width="480">
 
+- **Just ask questions.** Something like "what should I eat for lunch?" gets a
+  quick answer from Claude (or Codex) without starting a beam. Requests that
+  need a computer, like writing code or building a page, go to a beam.
 - **Keep going in the same thread** to make changes, like "make the title
   bigger."
 - **Share what you made.** Ask the bot to publish it and you get a link you can
@@ -166,7 +169,31 @@ newest message as soon as the current one finishes.
 
 <img src="assets/screenshots/bot-list-beams.png" alt="Teleport Beams Bot answers 'how many beams do I have' with a list of beams, regions, and expiry times" width="560">
 
-For each other request, Teleport Beams Bot:
+### Chat answers
+
+Questions that don't need a computer ("what should I eat for lunch?", "explain
+DNS like I'm five") are answered by the model directly, with no beam. Teleport
+Beams Bot asks Teleport for a short-lived certificate for the tenant's `anthropic`
+app (or `openai` with "use codex") as you, through your delegation, and sends
+the request through Teleport's app proxy, which adds the provider's API key.
+Every chat request is an app session in Teleport's audit log, attributed to you
+and the bot.
+
+The model is told to hand off anything that needs a computer: writing,
+running, or testing code, creating files or pages, installing software,
+publishing, or managing beams. Those requests continue in a beam as described
+below, with the chat so far passed to the coding agent as context. Once a
+thread is working in a beam, follow-ups go to the agent in that beam, and
+naming one of your beams always goes straight to it. If the model apps aren't
+available, every request goes to a beam as before.
+
+The chat models are set with `chat_claude_model` (default `claude-sonnet-4-5`)
+and `chat_codex_model` (default `gpt-5`); the tenant maps these names to the
+models it serves. `disable_chat = true` turns chat answers off.
+
+### Work in a beam
+
+For requests that need a computer, Teleport Beams Bot:
 
 1. Picks one of your own beams: the one this thread already uses, a beam you
    named, or your newest. If you have none, it creates one, owned by you.
@@ -185,8 +212,8 @@ Asking for another beam creates one, and the rest of that thread works in it:
 <img src="assets/screenshots/bot-create-beam.png" alt="Teleport Beams Bot creates a new beam on request" width="560">
 
 To delete beams, tell Teleport Beams Bot "delete" followed by their names (for example
-"delete curious-shield and mint-arc"), or "delete this beam" in the beam's
-thread. Teleport Beams Bot handles this itself rather than asking the coding agent, and
+"delete curious-shield and mint-arc"), "delete this beam" in the beam's
+thread, or "delete all my beams". Teleport Beams Bot handles this itself rather than asking the coding agent, and
 only when the beam names come right after the word "delete" or "remove", so a
 request like "remove the header from the page in mint-arc" is still sent to
 the agent. You can also use `/beams rm <name>`.
@@ -366,6 +393,9 @@ Start from `config.toml.example`. The Beams settings:
 | `claude_timeout` | `15m` | Limit for `/beams claude` and the bot's Claude runs |
 | `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags. Print mode cannot ask for tool approval, and beams are throwaway runtimes. |
 | `codex_timeout` | `15m` | Limit for `/beams codex` and the bot's Codex runs |
+| `chat_claude_model` | `claude-sonnet-4-5` | Model for chat answers through the `anthropic` app |
+| `chat_codex_model` | `gpt-5` | Model for chat answers through the `openai` app ("use codex") |
+| `disable_chat` | `false` | Send every request to a coding agent in a beam instead of answering chat questions directly |
 | `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
