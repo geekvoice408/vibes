@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..53b9c9effec
+index 00000000000..069eaad64f9
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,292 @@
+@@ -0,0 +1,305 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -118,8 +118,9 @@ index 00000000000..53b9c9effec
 +
 +type beamsRunner interface {
 +	Run(ctx context.Context, teamID, userID, text string) (string, error)
-+	Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error)
++	Handle(ctx context.Context, teamID, userID, threadKey, text string) (AskResult, error)
 +	FollowsThread(teamID, userID, threadKey string) bool
++	Connected(teamID, userID string) bool
 +}
 +
 +// BeamsApp consumes /beams commands from Slack Socket Mode.
@@ -285,16 +286,28 @@ index 00000000000..53b9c9effec
 +		"slack_channel_id", event.Channel,
 +	)
 +	log.InfoContext(ctx, "Handling Beams Slack message")
-+	if announce && !isInstantRequest(request) {
++	// Skip "On it" when the answer is instant or the user still has to
++	// authorize the bot.
++	if announce && !isInstantRequest(request) && a.runner.Connected(event.TeamID, event.User) {
 +		a.reply(ctx, event, threadTS, "On it. Working in your beam; this can take a few minutes.")
 +	}
 +
-+	output, err := a.runner.Ask(ctx, event.TeamID, event.User, event.Channel+"-"+threadTS, request)
++	result, err := a.runner.Handle(ctx, event.TeamID, event.User, event.Channel+"-"+threadTS, request)
 +	if err != nil {
-+		output = fmt.Sprintf("Sorry, that failed: %s", trace.UserMessage(err))
++		result = AskResult{Reply: fmt.Sprintf("Sorry, that failed: %s", trace.UserMessage(err))}
 +		log.WarnContext(ctx, "Beams Slack message failed", "error", err)
 +	}
-+	a.reply(ctx, event, threadTS, output)
++	a.reply(ctx, event, threadTS, result.Reply)
++	if result.DM != "" {
++		// Posting to a user ID delivers to the app's direct message with them.
++		if err := a.bot.PostBeamsThreadReply(ctx, event.User, "", result.DM); err != nil {
++			log.ErrorContext(ctx, "Failed to send Beams direct message", "error", err)
++		}
++	}
++	if resume := result.Resume; resume != nil {
++		origin := BeamsMessageEvent{TeamID: event.TeamID, User: event.User, Channel: resume.Channel, TS: resume.ThreadTS}
++		go a.handleMessage(ctx, origin, resume.Text)
++	}
 +}
 +
 +func (a *BeamsApp) reply(ctx context.Context, event BeamsMessageEvent, threadTS, text string) {
@@ -375,16 +388,18 @@ index 00000000000..53b9c9effec
 +}
 diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
 new file mode 100644
-index 00000000000..1dc8030848b
+index 00000000000..c7fba0aaf79
 --- /dev/null
 +++ b/integrations/access/slack/beams_app_test.go
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,167 @@
 +package slack
 +
 +import (
 +	"context"
++	"strings"
 +	"sync"
 +	"testing"
++	"time"
 +
 +	"github.com/stretchr/testify/require"
 +)
@@ -392,6 +407,7 @@ index 00000000000..1dc8030848b
 +type fakeBeamsBot struct {
 +	mu      sync.Mutex
 +	replies []string
++	dms     []string
 +}
 +
 +func (b *fakeBeamsBot) GenerateWebSocketURL(context.Context) (string, error) { return "", nil }
@@ -400,9 +416,13 @@ index 00000000000..1dc8030848b
 +	return "", nil
 +}
 +
-+func (b *fakeBeamsBot) PostBeamsThreadReply(_ context.Context, _, _, text string) error {
++func (b *fakeBeamsBot) PostBeamsThreadReply(_ context.Context, channel, threadTS, text string) error {
 +	b.mu.Lock()
 +	defer b.mu.Unlock()
++	if threadTS == "" {
++		b.dms = append(b.dms, channel+": "+text)
++		return nil
++	}
 +	b.replies = append(b.replies, text)
 +	return nil
 +}
@@ -419,8 +439,9 @@ index 00000000000..1dc8030848b
 +	return "", nil
 +}
 +func (r *blockingRunner) FollowsThread(string, string, string) bool { return true }
++func (r *blockingRunner) Connected(string, string) bool             { return true }
 +
-+func (r *blockingRunner) Ask(_ context.Context, _, _, _, text string) (string, error) {
++func (r *blockingRunner) Handle(_ context.Context, _, _, _, text string) (AskResult, error) {
 +	r.mu.Lock()
 +	r.asks = append(r.asks, text)
 +	r.mu.Unlock()
@@ -428,7 +449,7 @@ index 00000000000..1dc8030848b
 +	if text == "first" {
 +		<-r.release
 +	}
-+	return "answer to " + text, nil
++	return AskResult{Reply: "answer to " + text}, nil
 +}
 +
 +func TestBotOneRequestPerThread(t *testing.T) {
@@ -476,12 +497,74 @@ index 00000000000..1dc8030848b
 +	require.True(t, q.start("C1-2.2", queuedMessage{}))
 +	require.False(t, q.start("C1-1.1", queuedMessage{request: "later"}))
 +}
++
++// authRunner scripts the authorization flow: a channel request before
++// connecting, then the session ID in a DM, then the resumed request.
++type authRunner struct {
++	mu        sync.Mutex
++	connected bool
++	handled   []string
++	resumed   chan struct{}
++}
++
++func (r *authRunner) Run(context.Context, string, string, string) (string, error) { return "", nil }
++func (r *authRunner) FollowsThread(string, string, string) bool                   { return false }
++func (r *authRunner) Connected(string, string) bool {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	return r.connected
++}
++
++func (r *authRunner) Handle(_ context.Context, _, _, threadKey, text string) (AskResult, error) {
++	r.mu.Lock()
++	defer r.mu.Unlock()
++	r.handled = append(r.handled, threadKey+" "+text)
++	switch {
++	case !r.connected && strings.HasPrefix(threadKey, "C1-"):
++		return AskResult{Reply: "see your DMs", DM: "instructions"}, nil
++	case !r.connected:
++		r.connected = true
++		return AskResult{Reply: "connected", Resume: &PendingRequest{Channel: "C1", ThreadTS: "1.1", Text: "make a page"}}, nil
++	default:
++		close(r.resumed)
++		return AskResult{Reply: "page done"}, nil
++	}
++}
++
++func TestBotAuthorizationFlowUsesDirectMessage(t *testing.T) {
++	bot := &fakeBeamsBot{}
++	runner := &authRunner{resumed: make(chan struct{})}
++	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
++	ctx := t.Context()
++
++	app.handleMessage(ctx, BeamsMessageEvent{TeamID: "T1", User: "UALICE", Channel: "C1", TS: "1.1"}, "make a page")
++	require.Equal(t, []string{"see your DMs"}, bot.replies, "no \"On it\" before the user is connected")
++	require.Equal(t, []string{"UALICE: instructions"}, bot.dms)
++
++	app.handleMessage(ctx, BeamsMessageEvent{TeamID: "T1", User: "UALICE", Channel: "D1", TS: "2.2"}, "the-session-id")
++	<-runner.resumed
++
++	require.Eventually(t, func() bool {
++		bot.mu.Lock()
++		defer bot.mu.Unlock()
++		return len(bot.replies) == 4
++	}, time.Second, 10*time.Millisecond)
++	require.Equal(t, []string{
++		"see your DMs",
++		"connected",
++		"On it. Working in your beam; this can take a few minutes.",
++		"page done",
++	}, bot.replies)
++	runner.mu.Lock()
++	defer runner.mu.Unlock()
++	require.Equal(t, []string{"C1-1.1 make a page", "D1-2.2 the-session-id", "C1-1.1 make a page"}, runner.handled)
++}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..0b8caa3cded
+index 00000000000..08a1555dc40
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,550 @@
+@@ -0,0 +1,611 @@
 +package slack
 +
 +import (
@@ -589,73 +672,78 @@ index 00000000000..0b8caa3cded
 +	return isBeamMeUp(text) || isBeamsIntroQuestion(text)
 +}
 +
-+// Ask handles a natural-language request. It picks one of the user's beams
++// Handle handles a natural-language request. It picks one of the user's beams
 +// (or creates one), hands the request to Claude Code there, and carries out
 +// the actions Claude asks for. Requests in the same Slack thread continue the
 +// same beam and Claude conversation.
-+func (r BeamsCommandRunner) Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error) {
++func (r BeamsCommandRunner) Handle(ctx context.Context, teamID, userID, threadKey, text string) (AskResult, error) {
 +	if !safeThreadKey.MatchString(threadKey) {
-+		return "", trace.BadParameter("invalid Slack thread")
++		return AskResult{}, trace.BadParameter("invalid Slack thread")
 +	}
 +	if isBeamMeUp(text) {
-+		return beamMeUpReplies[rand.IntN(len(beamMeUpReplies))], nil
++		return AskResult{Reply: beamMeUpReplies[rand.IntN(len(beamMeUpReplies))]}, nil
 +	}
 +	if isBeamsIntroQuestion(text) {
-+		return beamsIntro, nil
++		return AskResult{Reply: beamsIntro}, nil
 +	}
 +	s, err := r.newSession(ctx, teamID, userID)
 +	if err != nil {
-+		return "", trace.Wrap(err)
++		return AskResult{}, trace.Wrap(err)
 +	}
 +
 +	threadsDir := filepath.Join(s.profileDir, "threads")
 +	if err := os.MkdirAll(threadsDir, 0o700); err != nil {
-+		return "", trace.Wrap(err)
++		return AskResult{}, trace.Wrap(err)
 +	}
-+	pendingPath := filepath.Join(threadsDir, threadKey+".pending")
++	channel, threadTS, _ := strings.Cut(threadKey, "-")
 +
 +	// The bot only works as the user, so beams it creates are owned by them and
 +	// their published URLs are reachable. Until the user authorizes the bot,
-+	// hold the request and explain how.
++	// hold the request and explain how in a direct message.
 +	var notes []string
 +	if s.delegation == "" {
 +		id := sessionIDText.FindString(text)
 +		if id == "" {
-+			return s.requestAuthorization(threadKey, pendingPath, text)
++			return s.requestAuthorization(channel, threadTS, text)
 +		}
 +		if _, err := s.connect(ctx, []string{id}); err != nil {
-+			return "", trace.Wrap(err, "connecting delegation session")
++			return AskResult{}, trace.Wrap(err, "connecting delegation session")
 +		}
 +		s.delegation = strings.ToLower(id)
-+		pending, _ := os.ReadFile(pendingPath)
-+		_ = os.Remove(pendingPath)
-+		if strings.TrimSpace(string(pending)) == "" {
-+			return fmt.Sprintf("Thanks, you're connected as %s. What would you like me to do?", s.username), nil
++		connected := fmt.Sprintf("Thanks, you're connected as %s.", s.username)
++		pending := s.takePendingRequest()
++		switch {
++		case pending == nil:
++			return AskResult{Reply: connected + " What would you like me to do?"}, nil
++		case pending.Channel != channel || pending.ThreadTS != threadTS:
++			// Continue the request in the thread where it was asked.
++			return AskResult{Reply: connected + " I'll pick up your request where you asked it.", Resume: pending}, nil
 +		}
-+		notes = append(notes, fmt.Sprintf("Thanks, you're connected as %s.", s.username))
-+		text = string(pending)
++		notes = append(notes, connected)
++		text = pending.Text
 +	}
 +
 +	beams, err := s.delegatedBeams(ctx)
 +	if needsAuthorization(err) {
-+		return s.requestAuthorization(threadKey, pendingPath, text)
++		return s.requestAuthorization(channel, threadTS, text)
 +	}
 +	if err != nil {
-+		return "", trace.Wrap(err)
++		return AskResult{}, trace.Wrap(err)
 +	}
 +	threadPath := filepath.Join(threadsDir, threadKey)
 +	thread := readThreadState(threadPath)
 +	if names, ok := removeTargets(text, beams, thread.beam); ok {
-+		return s.removeBeams(ctx, beams, names, thread, threadPath, notes)
++		reply, err := s.removeBeams(ctx, beams, names, thread, threadPath, notes)
++		return AskResult{Reply: reply}, trace.Wrap(err)
 +	}
 +	if isBeamsListQuestion(text) {
 +		threadPath := filepath.Join(threadsDir, threadKey)
 +		if _, err := os.Stat(threadPath); os.IsNotExist(err) {
 +			if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
-+				return "", trace.Wrap(err)
++				return AskResult{}, trace.Wrap(err)
 +			}
 +		}
-+		return truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now(), "You don't have any beams yet. Ask me to create one.")), "\n\n")), nil
++		return AskResult{Reply: truncateSlackOutput(strings.Join(append(notes, formatBeamsList(beams, time.Now(), "You don't have any beams yet. Ask me to create one.")), "\n\n"))}, nil
 +	}
 +
 +	agent := thread.agent
@@ -673,7 +761,7 @@ index 00000000000..0b8caa3cded
 +	if name == "" {
 +		_, name, err = s.createBeam(ctx, nil)
 +		if err != nil {
-+			return "", trace.Wrap(err, "creating a beam")
++			return AskResult{}, trace.Wrap(err, "creating a beam")
 +		}
 +		created = true
 +		notes = append(notes, fmt.Sprintf("Created beam `%s`.", name))
@@ -681,7 +769,7 @@ index 00000000000..0b8caa3cded
 +	// Mark the beam fresh until an agent run succeeds there, so a failed first
 +	// run is not followed by --continue.
 +	if err := writeThreadState(threadPath, threadState{beam: name, fresh: !continued, agent: agent}); err != nil {
-+		return "", trace.Wrap(err)
++		return AskResult{}, trace.Wrap(err)
 +	}
 +
 +	agentArgs := []string{name}
@@ -695,10 +783,10 @@ index 00000000000..0b8caa3cded
 +	}
 +	output, err := run(ctx, agentArgs)
 +	if err != nil {
-+		return "", trace.Wrap(err, "running %s in beam %q", agentDisplayName(agent), name)
++		return AskResult{}, trace.Wrap(err, "running %s in beam %q", agentDisplayName(agent), name)
 +	}
 +	if err := writeThreadState(threadPath, threadState{beam: name, agent: agent}); err != nil {
-+		return "", trace.Wrap(err)
++		return AskResult{}, trace.Wrap(err)
 +	}
 +
 +	reply, actions := parseBotActions(output)
@@ -714,14 +802,14 @@ index 00000000000..0b8caa3cded
 +			// for, starting a new agent conversation there.
 +			name = newBeam
 +			if err := writeThreadState(threadPath, threadState{beam: name, fresh: true, agent: agent}); err != nil {
-+				return "", trace.Wrap(err)
++				return AskResult{}, trace.Wrap(err)
 +			}
 +		}
 +	}
 +
 +	parts := append(notes, reply)
 +	parts = append(parts, actionNotes...)
-+	return truncateSlackOutput(strings.TrimSpace(strings.Join(parts, "\n\n"))), nil
++	return AskResult{Reply: truncateSlackOutput(strings.TrimSpace(strings.Join(parts, "\n\n")))}, nil
 +}
 +
 +const (
@@ -866,23 +954,79 @@ index 00000000000..0b8caa3cded
 +	return truncateSlackOutput(strings.Join(notes, "\n\n")), nil
 +}
 +
-+// requestAuthorization saves the request for later and asks the user to let
-+// the bot create beams as them. It records the thread so the user's reply
-+// with the session ID is picked up without a mention.
-+func (s beamsSession) requestAuthorization(threadKey, pendingPath, request string) (string, error) {
++// AskResult is the bot's response to a Slack message.
++type AskResult struct {
++	// Reply is posted in the thread the message came from.
++	Reply string
++	// DM, if set, is sent to the user as a direct message. Authorization
++	// instructions go here so they are not posted in a shared channel.
++	DM string
++	// Resume, if set, is a request to run again in its original thread, now
++	// that the user has authorized the bot from a direct message.
++	Resume *PendingRequest
++}
++
++// PendingRequest is a request held until the user authorizes the bot.
++type PendingRequest struct {
++	Channel  string `json:"channel"`
++	ThreadTS string `json:"thread_ts"`
++	Text     string `json:"text"`
++}
++
++// isDirectMessage reports whether a Slack channel ID is a direct message.
++func isDirectMessage(channel string) bool {
++	return strings.HasPrefix(channel, "D")
++}
++
++func (s beamsSession) pendingPath() string {
++	return filepath.Join(s.profileDir, "pending-request")
++}
++
++// takePendingRequest returns and forgets the request held for authorization.
++func (s beamsSession) takePendingRequest() *PendingRequest {
++	data, err := os.ReadFile(s.pendingPath())
++	if err != nil {
++		return nil
++	}
++	_ = os.Remove(s.pendingPath())
++	var pending PendingRequest
++	if json.Unmarshal(data, &pending) != nil || pending.Text == "" {
++		return nil
++	}
++	return &pending
++}
++
++// requestAuthorization holds the request and asks the user to let the bot
++// create beams as them. The instructions always go to a direct message; a
++// request made in a channel only gets a pointer to it there.
++func (s beamsSession) requestAuthorization(channel, threadTS, request string) (AskResult, error) {
 +	if s.runner.Config.BotName == "" {
-+		return "", trace.BadParameter("delegation is not configured; set beams.bot_name")
++		return AskResult{}, trace.BadParameter("delegation is not configured; set beams.bot_name")
 +	}
-+	if err := os.WriteFile(pendingPath, []byte(request), 0o600); err != nil {
-+		return "", trace.Wrap(err)
++	data, err := json.Marshal(PendingRequest{Channel: channel, ThreadTS: threadTS, Text: request})
++	if err != nil {
++		return AskResult{}, trace.Wrap(err)
 +	}
-+	threadPath := filepath.Join(s.profileDir, "threads", threadKey)
-+	if _, err := os.Stat(threadPath); os.IsNotExist(err) {
-+		if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
-+			return "", trace.Wrap(err)
-+		}
++	if err := os.WriteFile(s.pendingPath(), data, 0o600); err != nil {
++		return AskResult{}, trace.Wrap(err)
 +	}
-+	return s.authorizationReply("Reply here with the session ID it prints and I'll pick up your request."), nil
++	if isDirectMessage(channel) {
++		return AskResult{Reply: s.authorizationReply("Reply here with the session ID it prints and I'll pick up your request.")}, nil
++	}
++	return AskResult{
++		Reply: "To keep your credentials private, I've sent you a direct message to set up access. I'll come back to this thread once you're connected.",
++		DM:    s.authorizationReply("Reply to me here with the session ID it prints and I'll pick up your request in its thread."),
++	}, nil
++}
++
++// Connected reports whether a Slack user has a delegation session on file. It
++// does not check that the session is still valid.
++func (r BeamsCommandRunner) Connected(teamID, userID string) bool {
++	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) {
++		return false
++	}
++	_, err := os.Stat(filepath.Join(r.Config.ProfilesDir, teamID, userID, "delegation-session"))
++	return err == nil
 +}
 +
 +// isBeamsListQuestion reports whether a request only asks which beams the
@@ -1034,10 +1178,10 @@ index 00000000000..0b8caa3cded
 +}
 diff --git a/integrations/access/slack/beams_bot_test.go b/integrations/access/slack/beams_bot_test.go
 new file mode 100644
-index 00000000000..219ec93b189
+index 00000000000..423e40a176f
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot_test.go
-@@ -0,0 +1,442 @@
+@@ -0,0 +1,487 @@
 +package slack
 +
 +import (
@@ -1133,23 +1277,30 @@ index 00000000000..219ec93b189
 +	ctx := t.Context()
 +	thread := "C1-1700000000.000100"
 +
-+	// Not connected: the bot asks for authorization instead of acting as itself.
-+	out, err := runner.Ask(ctx, "T1", "UALICE", thread, "make a webpage about Seattle and publish it")
++	// Not connected: the instructions go to a direct message, and the channel
++	// thread only gets a pointer to it.
++	res, err := runner.Handle(ctx, "T1", "UALICE", thread, "make a webpage about Seattle and publish it")
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Before we can get started, you need to allow me to create beams as you.")
-+	require.Contains(t, out, "tsh delegation create-session --proxy=example.teleport.sh:443 --bot=teleport-beams-bot --allow-all --session-ttl=168h")
-+	require.True(t, runner.FollowsThread("T1", "UALICE", thread), "the reply with the session ID must be picked up without a mention")
++	require.Contains(t, res.Reply, "I've sent you a direct message")
++	require.NotContains(t, res.Reply, "tsh")
++	require.Contains(t, res.DM, "Before we can get started, you need to allow me to create beams as you.")
++	require.Contains(t, res.DM, "tsh delegation create-session --proxy=example.teleport.sh:443 --user=alice@example.com --bot=teleport-beams-bot --allow-all --session-ttl=168h")
 +	_, err = os.Stat(logPath)
 +	require.True(t, os.IsNotExist(err), "no tsh commands may run before the user connects")
 +
-+	// A bad ID is rejected and the request stays pending.
-+	_, err = runner.Ask(ctx, "T1", "UALICE", thread, "here you go 99999999-2222-3333-4444-555555555555")
++	// A bad ID sent in the DM is rejected and the request stays pending.
++	dm := "D1-1700000000.000150"
++	_, err = runner.Handle(ctx, "T1", "UALICE", dm, "here you go 99999999-2222-3333-4444-555555555555")
 +	require.Error(t, err)
 +
-+	// Pasting the session ID connects and resumes the original request.
-+	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "here you go "+testSessionID)
++	// The right ID connects and hands the request back to its thread.
++	res, err = runner.Handle(ctx, "T1", "UALICE", dm, "here you go "+testSessionID)
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Thanks, you're connected as alice@example.com.")
++	require.Equal(t, "Thanks, you're connected as alice@example.com. I'll pick up your request where you asked it.", res.Reply)
++	require.Equal(t, &PendingRequest{Channel: "C1", ThreadTS: "1700000000.000100", Text: "make a webpage about Seattle and publish it"}, res.Resume)
++
++	out, err := runner.Ask(ctx, "T1", "UALICE", thread, res.Resume.Text)
++	require.NoError(t, err)
 +	require.Contains(t, out, "Built the page.")
 +	require.Contains(t, out, "Published: https://mine.example")
 +	require.NotContains(t, out, "BEAMS_BOT_ACTION")
@@ -1186,9 +1337,10 @@ index 00000000000..219ec93b189
 +	sessionPath := filepath.Join(profile, "delegation-session")
 +	require.NoError(t, os.WriteFile(sessionPath, []byte("99999999-2222-3333-4444-555555555555"), 0o600))
 +
-+	out, err := runner.Ask(t.Context(), "T1", "UALICE", "C1-1700000000.000300", "make a page")
++	res, err := runner.Handle(t.Context(), "T1", "UALICE", "C1-1700000000.000300", "make a page")
 +	require.NoError(t, err)
-+	require.Contains(t, out, "Your authorization has expired.\n*Before we can get started")
++	require.Contains(t, res.Reply, "I've sent you a direct message")
++	require.Contains(t, res.DM, "Your authorization has expired.\n*Before we can get started")
 +	_, err = os.Stat(sessionPath)
 +	require.True(t, os.IsNotExist(err), "the expired session should be forgotten")
 +}
@@ -1480,12 +1632,49 @@ index 00000000000..219ec93b189
 +	require.Contains(t, string(calls), "beams rm mine\n")
 +	require.Contains(t, string(calls), "beams exec mine", "the page edit goes to the agent")
 +}
++
++// Ask returns just the thread reply, for tests that don't need DMs or resumes.
++func (r BeamsCommandRunner) Ask(ctx context.Context, teamID, userID, threadKey, text string) (string, error) {
++	res, err := r.Handle(ctx, teamID, userID, threadKey, text)
++	return res.Reply, err
++}
++
++func TestBotAuthorizationInDirectMessage(t *testing.T) {
++	tshPath, _ := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	ctx := t.Context()
++	thread := "D1-1700000000.000100"
++
++	// Asked in a DM: the instructions are the reply itself.
++	res, err := runner.Handle(ctx, "T1", "UALICE", thread, "make a page")
++	require.NoError(t, err)
++	require.Contains(t, res.Reply, "Before we can get started")
++	require.Contains(t, res.Reply, "--user=alice@example.com")
++	require.Empty(t, res.DM)
++	require.False(t, runner.Connected("T1", "UALICE"))
++
++	// The session ID in the same thread connects and carries on right there.
++	res, err = runner.Handle(ctx, "T1", "UALICE", thread, testSessionID)
++	require.NoError(t, err)
++	require.Nil(t, res.Resume)
++	require.Contains(t, res.Reply, "Thanks, you're connected as alice@example.com.")
++	require.Contains(t, res.Reply, "Built the page.")
++	require.True(t, runner.Connected("T1", "UALICE"))
++}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..e754ab81fd7
+index 00000000000..a2936992983
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,698 @@
+@@ -0,0 +1,701 @@
 +package slack
 +
 +import (
@@ -1639,7 +1828,7 @@ index 00000000000..e754ab81fd7
 +		_ = os.Remove(s.sessionPath)
 +		prefix = "Your authorization has expired.\n"
 +	}
-+	return s.runner.authorizationMessage(prefix, next)
++	return s.runner.authorizationMessage(prefix, next, s.username)
 +}
 +
 +// newSession authorizes a Slack user and loads their delegation state.
@@ -1675,7 +1864,7 @@ index 00000000000..e754ab81fd7
 +		return "", trace.BadParameter("delegation is not configured; set beams.bot_name")
 +	}
 +	if len(args) == 0 {
-+		return s.runner.authorizationMessage("", "Run `/beams connect <session-id>` with the ID it prints."), nil
++		return s.runner.authorizationMessage("", "Run `/beams connect <session-id>` with the ID it prints.", s.username), nil
 +	}
 +	if len(args) != 1 {
 +		return "", trace.BadParameter("usage: /beams connect [<delegation-session-id>]")
@@ -2076,20 +2265,23 @@ index 00000000000..e754ab81fd7
 +
 +// authorizationMessage asks the user to let the bot create beams as them. next
 +// says how to give the session ID back.
-+func (r BeamsCommandRunner) authorizationMessage(prefix, next string) string {
++func (r BeamsCommandRunner) authorizationMessage(prefix, next, username string) string {
 +	return fmt.Sprintf(
-+		"%s*Before we can get started, you need to allow me to create beams as you.*\n\n1. Run this in a terminal where you're signed in to Teleport:\n```%s```\n2. %s",
++		"%s*Before we can get started, you need to allow me to create beams as you.*\n\n1. Run this in a terminal (`tsh` signs you in to Teleport if needed):\n```%s```\n2. %s",
 +		prefix,
-+		r.delegationCommand(),
++		r.delegationCommand(username),
 +		next,
 +	)
 +}
 +
 +// delegationCommand is the tsh command a user runs to let the bot act as them.
-+func (r BeamsCommandRunner) delegationCommand() string {
++// --user makes tsh sign in as the user's Teleport account, so the session is
++// created for the user the plugin matched from their Slack email.
++func (r BeamsCommandRunner) delegationCommand(username string) string {
 +	return fmt.Sprintf(
-+		"tsh delegation create-session --proxy=%s --bot=%s --allow-all --session-ttl=%s",
++		"tsh delegation create-session --proxy=%s --user=%s --bot=%s --allow-all --session-ttl=%s",
 +		r.Config.Proxy,
++		username,
 +		r.Config.BotName,
 +		r.Config.DelegationTTL,
 +	)
@@ -2186,7 +2378,7 @@ index 00000000000..e754ab81fd7
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..32ba093af90
+index 00000000000..304bc30ad28
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
 @@ -0,0 +1,248 @@
@@ -2361,7 +2553,7 @@ index 00000000000..32ba093af90
 +		out, err := runner.Run(ctx, "T1", "UALICE", command)
 +		require.NoError(t, err, command)
 +		require.Contains(t, out, "Before we can get started, you need to allow me to create beams as you.", command)
-+		require.Contains(t, out, "--bot=teleport-beams-bot", command)
++		require.Contains(t, out, "--user=alice@example.com --bot=teleport-beams-bot", command)
 +		require.Contains(t, out, "/beams connect <session-id>", command)
 +		require.False(t, strings.HasPrefix(out, "```"), "the prompt has its own code block and must not be wrapped again")
 +	}

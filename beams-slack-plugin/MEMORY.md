@@ -176,12 +176,11 @@ OpenAI credentials). The bot uses either; see below.
    bot (`FollowsThread`
    checks `<profile>/threads/<channel>-<thread_ts>`). Bot messages, edits,
    and other subtypes are ignored.
-2. `Ask` requires delegation. If the user is not connected, it saves the
-   request to `<profile>/threads/<key>.pending`, creates an empty thread file
-   so the reply is a follow-up, and returns the "Before we can get started"
-   message with `tsh delegation create-session`. A later message in the
-   thread containing a UUID connects (same validation as `/beams connect`)
-   and replays the pending request. If minting fails with AccessDenied or
+2. `Handle` requires delegation. If the user is not connected, it saves the
+   request to `<profile>/pending-request` and sends the "Before we can get
+   started" instructions by DM (see below). A later message containing a UUID
+   connects (same validation as `/beams connect`) and resumes the pending
+   request in its original thread. If minting fails with AccessDenied or
    NotFound, the session file is removed and the user is asked again.
 2b. Agent choice: `requestedAgent` looks for "use/with/via/through/ask
    codex|claude" or a leading "codex"/"claude". The thread file is
@@ -192,7 +191,7 @@ OpenAI credentials). The bot uses either; see below.
    mentions "beams" plus list/show/what/which/how many, and no action verb)
    are answered from `tsh beams ls` by `formatBeamsList` without running
    Claude. The thread file is still created so follow-ups work.
-4. Otherwise `Ask` picks one of the user's beams: the thread's beam (then
+4. Otherwise `Handle` picks one of the user's beams: the thread's beam (then
    `claude --continue`), a beam named in the text, or the newest by expiry. If there are none it creates
    one, and the prompt tells Claude the beam is new.
 5. It runs `claude -p --dangerously-skip-permissions <prompt>` through
@@ -226,13 +225,23 @@ backticks trimmed (`trimSlackCode`); pasting a code-formatted beam name used
 to fail with "does not exist". `cleanTSHError` drops tsh's "cannot relogin in
 non-interactive session" line.
 
+Authorization is set up in a DM: `Handle` returns an `AskResult`. For an
+unauthorized request in a channel, `Reply` is only a pointer and `DM` carries
+the instructions (posted with `chat.postMessage` to the user ID). The request
+is saved in `<profile>/pending-request` (channel, thread_ts, text). When a
+session ID arrives (normally in the DM), `Resume` sends the request back to
+its original thread, which the app runs through the usual thread queue. In a
+DM the instructions are the reply itself. "On it" is skipped while the user
+is not connected (`Connected`). The `tsh delegation create-session` command
+includes `--user=<resolved Teleport username>`.
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text
 /var/lib/teleport-slack/beams/<slack-team-id>/<slack-user-id>/
   delegation-session   delegation session ID after /beams connect
   threads/<ch>-<ts>    beam used by each bot thread ("<beam> new" = no Claude conversation yet)
-  threads/<ch>-<ts>.pending  request waiting for the user to authorize the bot
+  pending-request      request (with its channel and thread) waiting for the user to authorize the bot
   identity-*           temp delegated identities, deleted after each command
 ```
 

@@ -120,17 +120,23 @@ Talk to Teleport Beams Bot in any of these ways:
   `message.channels` event)
 - a reply in a thread Teleport Beams Bot is already working in (no mention needed)
 
-The first time (and again when your authorization expires), Teleport Beams Bot replies:
+The first time (and again when your authorization expires), Teleport Beams Bot
+sets up access with you in a direct message, so nothing about your credentials
+is posted in a shared channel. The thread just gets a note that it has messaged
+you, and the DM says:
 
 > **Before we can get started, you need to allow me to create beams as you.**
 >
-> 1. Run this in a terminal where you're signed in to Teleport:
->    `tsh delegation create-session ...`
-> 2. Reply here with the session ID it prints and I'll pick up your request.
+> 1. Run this in a terminal (`tsh` signs you in to Teleport if needed):
+>    `tsh delegation create-session --proxy=... --user=you@example.com ...`
+> 2. Reply to me here with the session ID it prints and I'll pick up your
+>    request in its thread.
 
-Paste the session ID (or the whole command output) into the thread. Teleport Beams Bot
-connects you and then carries out the request you made. This is the same
-connection `/beams connect` makes, and it lasts up to 7 days.
+The command already includes your Teleport username, matched from your Slack
+email. Reply to the DM with the session ID (or the whole command output);
+Teleport Beams Bot connects you and then carries out your original request back
+in the thread where you asked it. This is the same connection `/beams connect`
+makes, and it lasts up to 7 days.
 
 Questions about which beams you have ("how many beams do I have", "list my
 beams") are answered straight from `tsh beams ls` in a second or two. Anything
@@ -179,19 +185,19 @@ replies:
 
 > **Before we can get started, you need to allow me to create beams as you.**
 >
-> 1. Run this in a terminal where you're signed in to Teleport:
->    `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --bot=teleport-beams-bot --allow-all --session-ttl=168h`
+> 1. Run this in a terminal (`tsh` signs you in to Teleport if needed):
+>    `tsh delegation create-session --proxy=example-beams-tenant.beams.sh:443 --user=you@example.com --bot=teleport-beams-bot --allow-all --session-ttl=168h`
 > 2. Run `/beams connect <session-id>` with the ID it prints.
 
-This is how the prompt looks in reply to a slash command (the tenant name is
-hidden):
+With slash commands the prompt is a reply only you can see. This is how it
+looks (from before `--user` was added; the tenant name is hidden):
 
 <img src="assets/screenshots/beams-connect-prompt.png" alt="The plugin's private reply asking the user to run tsh delegation create-session and then /beams connect" width="720">
 
 Run it, then hand back the session ID it prints:
 
-- with Teleport Beams Bot: reply in the thread (no mention needed); Teleport Beams Bot then carries
-  out the request you made
+- with Teleport Beams Bot: reply to its direct message; it then carries out
+  your request in the thread where you asked it
 - with slash commands: `/beams connect <session-id>`
 
 For the next 7 days every beam action runs as your Teleport user: beams are
