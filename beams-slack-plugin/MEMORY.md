@@ -344,7 +344,7 @@ anywhere; ventura still uses Compose.
   -d --no-deps teleport-slack`.
 - 2026-10-05: GitHub Actions had an incident, so the plugin image was built on
   ventura (`/usr/local/docker/beams-hackathon/build/`, tag
-  `beams-slack-plugin:local-a077c6d` (earlier `local-0faee65`, `local-398933f`)) and compose's `teleport-slack` image
+  `beams-slack-plugin:local-0d3b4c5` (earlier `local-a077c6d`, `local-0faee65`, `local-398933f`)) and compose's `teleport-slack` image
   line points at that local tag (backup `docker-compose.yml.bak-*`). Switch
   back to `ghcr.io/geekvoice408/beams-slack-plugin:latest` and pull once CI
   works. Watchtower runs on ventura, which is why the local tag is distinct.
