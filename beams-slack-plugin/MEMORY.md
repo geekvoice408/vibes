@@ -279,6 +279,16 @@ sends up to 2 images of 3.5 MB (Teleport's model proxy caps requests at
 history keeps "[attached name]". Otherwise the request goes to a beam and
 files are copied with `tsh beams scp` into `/tmp/slack-attachments/`.
 
+Request log (`beams_audit.go`): plugins can't call `EmitAuditEvent` (only
+built-in Teleport servers can), and `app.session.llm_request` has
+provider/model/tokens but no prompt. So `logRequest` writes an INFO line
+"Beams bot request" with kind (chat/beam/delete/list/slash), Slack and
+Teleport users, request text (<= 2000 chars, off with `omit_request_text`),
+and for chat the app session ID parsed from the app certificate
+(`tlsca.FromSubject` -> `RouteToApp.SessionID`) to join with
+`app.session.llm_request`. `connect` is not logged. Beam work text is already
+in Teleport's audit via the SSH exec command line.
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text

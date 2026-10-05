@@ -639,12 +639,192 @@ index 00000000000..ef5fe8bd3e1
 +	_, err = Bot{}.DownloadSlackFile(t.Context(), "http://files.slack.com/x", 10)
 +	require.ErrorContains(t, err, "refusing to download")
 +}
+diff --git a/integrations/access/slack/beams_audit.go b/integrations/access/slack/beams_audit.go
+new file mode 100644
+index 00000000000..deb43c89820
+--- /dev/null
++++ b/integrations/access/slack/beams_audit.go
+@@ -0,0 +1,62 @@
++package slack
++
++import (
++	"context"
++
++	"github.com/gravitational/trace"
++
++	"github.com/gravitational/teleport/api/utils/keys"
++	"github.com/gravitational/teleport/integrations/lib/logger"
++	"github.com/gravitational/teleport/lib/tlsca"
++)
++
++// Plugins cannot write to Teleport's audit log, and its LLM request events
++// record models and token counts but not prompts. So the bot logs one
++// structured line per request, which can be shipped alongside the audit log.
++// Chat lines carry the Teleport app session ID to match
++// app.session.llm_request events.
++const (
++	requestLogMessage    = "Beams bot request"
++	maxLoggedRequestText = 2000
++)
++
++// logRequest records what a Slack user asked the bot to do. attrs are extra
++// key/value pairs, such as the beam or app session ID.
++func (s beamsSession) logRequest(ctx context.Context, kind, text string, attrs ...any) {
++	args := []any{
++		"kind", kind,
++		"slack_team_id", s.teamID,
++		"slack_user_id", s.slackUserID,
++		"teleport_user", s.username,
++	}
++	args = append(args, attrs...)
++	if !s.runner.Config.OmitRequestText {
++		if len(text) > maxLoggedRequestText {
++			text = text[:maxLoggedRequestText] + "…"
++		}
++		args = append(args, "request", text)
++	}
++	logger.Get(ctx).InfoContext(ctx, requestLogMessage, args...)
++}
++
++// attachmentNames lists attachments for the request log.
++func attachmentNames(files []attachment) []string {
++	var names []string
++	for _, f := range files {
++		names = append(names, f.Name)
++	}
++	return names
++}
++
++// appSessionID reads the Teleport app session ID from an app certificate.
++func appSessionID(certPEM []byte) (string, error) {
++	cert, _, err := keys.X509Certificate(certPEM)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	identity, err := tlsca.FromSubject(cert.Subject, cert.NotAfter)
++	if err != nil {
++		return "", trace.Wrap(err)
++	}
++	return identity.RouteToApp.SessionID, nil
++}
+diff --git a/integrations/access/slack/beams_audit_test.go b/integrations/access/slack/beams_audit_test.go
+new file mode 100644
+index 00000000000..6e3b0311358
+--- /dev/null
++++ b/integrations/access/slack/beams_audit_test.go
+@@ -0,0 +1,106 @@
++package slack
++
++import (
++	"bytes"
++	"crypto/ecdsa"
++	"crypto/elliptic"
++	"crypto/rand"
++	"crypto/x509"
++	"encoding/json"
++	"encoding/pem"
++	"log/slog"
++	"math/big"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/require"
++
++	"github.com/gravitational/teleport/integrations/lib/logger"
++	"github.com/gravitational/teleport/lib/tlsca"
++)
++
++// requestLogs returns the "Beams bot request" lines written to buf.
++func requestLogs(t *testing.T, buf *bytes.Buffer) []map[string]any {
++	var lines []map[string]any
++	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
++		var entry map[string]any
++		require.NoError(t, json.Unmarshal([]byte(line), &entry))
++		if entry["msg"] == requestLogMessage {
++			lines = append(lines, entry)
++		}
++	}
++	return lines
++}
++
++func TestRequestLog(t *testing.T) {
++	tshPath, _ := writeFakeTSH(t)
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++	}
++	var buf bytes.Buffer
++	ctx := logger.WithLogger(t.Context(), slog.New(slog.NewJSONHandler(&buf, nil)))
++
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.005000", "make a webpage about Seattle")
++	require.NoError(t, err)
++	_, err = runner.Run(ctx, "T1", "UALICE", "exec mine uname -a")
++	require.NoError(t, err)
++
++	logs := requestLogs(t, &buf)
++	require.Len(t, logs, 2, "connect is not logged, so session IDs stay out of logs")
++	beam := logs[0]
++	require.Equal(t, "beam", beam["kind"])
++	require.Equal(t, "T1", beam["slack_team_id"])
++	require.Equal(t, "UALICE", beam["slack_user_id"])
++	require.Equal(t, "alice@example.com", beam["teleport_user"])
++	require.Equal(t, "mine", beam["beam"])
++	require.Equal(t, agentClaude, beam["agent"])
++	require.Equal(t, "make a webpage about Seattle", beam["request"])
++	slash := logs[1]
++	require.Equal(t, "slash", slash["kind"])
++	require.Equal(t, "exec", slash["command"])
++	require.Equal(t, "exec mine uname -a", slash["request"])
++
++	// The text can be left out.
++	buf.Reset()
++	runner.Config.OmitRequestText = true
++	_, err = runner.Run(ctx, "T1", "UALICE", "ls")
++	require.NoError(t, err)
++	logs = requestLogs(t, &buf)
++	require.Len(t, logs, 1)
++	require.NotContains(t, logs[0], "request")
++	require.Equal(t, "ls", logs[0]["command"])
++}
++
++func TestAppSessionID(t *testing.T) {
++	identity := tlsca.Identity{
++		Username:   "alice@example.com",
++		Groups:     []string{"beam-user"},
++		Expires:    time.Now().Add(time.Hour),
++		RouteToApp: tlsca.RouteToApp{SessionID: "app-session-1", Name: "anthropic", PublicAddr: "anthropic.example.teleport.sh"},
++	}
++	subject, err := identity.Subject()
++	require.NoError(t, err)
++	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
++	require.NoError(t, err)
++	template := &x509.Certificate{
++		SerialNumber: big.NewInt(1),
++		Subject:      subject,
++		NotBefore:    time.Now().Add(-time.Minute),
++		NotAfter:     time.Now().Add(time.Hour),
++	}
++	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
++	require.NoError(t, err)
++
++	id, err := appSessionID(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
++	require.NoError(t, err)
++	require.Equal(t, "app-session-1", id)
++}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..30e1eb956fc
+index 00000000000..a65a6bdb097
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,710 @@
+@@ -0,0 +1,715 @@
 +package slack
 +
 +import (
@@ -847,10 +1027,12 @@ index 00000000000..30e1eb956fc
 +	threadPath := filepath.Join(threadsDir, threadKey)
 +	thread := readThreadState(threadPath)
 +	if names, ok := removeTargets(text, beams, thread.beam); ok {
++		s.logRequest(ctx, "delete", text, "beams", names)
 +		reply, err := s.removeBeams(ctx, beams, names, thread, threadPath, notes)
 +		return AskResult{Reply: reply}, trace.Wrap(err)
 +	}
 +	if isBeamsListQuestion(text) {
++		s.logRequest(ctx, "list", text)
 +		threadPath := filepath.Join(threadsDir, threadKey)
 +		if _, err := os.Stat(threadPath); os.IsNotExist(err) {
 +			if err := os.WriteFile(threadPath, nil, 0o600); err != nil {
@@ -927,6 +1109,9 @@ index 00000000000..30e1eb956fc
 +		}
 +		request = text + "\n\n" + attachmentPrompt(paths)
 +	}
++
++	s.logRequest(ctx, "beam", text,
++		"beam", name, "agent", agent, "continued", continued, "attachments", attachmentNames(files))
 +
 +	agentArgs := []string{name}
 +	if continued {
@@ -1856,10 +2041,10 @@ index 00000000000..86324dfead0
 +}
 diff --git a/integrations/access/slack/beams_chat.go b/integrations/access/slack/beams_chat.go
 new file mode 100644
-index 00000000000..a1dfb1e6746
+index 00000000000..0327a354c45
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat.go
-@@ -0,0 +1,347 @@
+@@ -0,0 +1,365 @@
 +package slack
 +
 +import (
@@ -1882,6 +2067,7 @@ index 00000000000..a1dfb1e6746
 +	delegationv1 "github.com/gravitational/teleport/api/gen/proto/go/teleport/delegation/v1"
 +	"github.com/gravitational/teleport/api/types"
 +	"github.com/gravitational/teleport/api/utils/keys"
++	"github.com/gravitational/teleport/integrations/lib/logger"
 +)
 +
 +const (
@@ -2009,10 +2195,18 @@ index 00000000000..a1dfb1e6746
 +	if err != nil {
 +		return "", trace.Wrap(err)
 +	}
-+	cert, err := s.appCertificate(ctx, app)
++	cert, sessionID, err := s.appCertificate(ctx, app)
 +	if err != nil {
 +		return "", trace.Wrap(err)
 +	}
++	model := cmp.Or(s.runner.Config.ChatClaudeModel, defaultChatClaudeModel)
++	if agent == agentCodex {
++		model = cmp.Or(s.runner.Config.ChatCodexModel, defaultChatCodexModel)
++	}
++	last := messages[len(messages)-1]
++	s.logRequest(ctx, "chat", last.Content,
++		"agent", agent, "app", app.Name, "model", model,
++		"app_session_id", sessionID, "attachments", attachmentNames(last.Images))
 +	client := &http.Client{
 +		Timeout:   chatTimeout,
 +		Transport: &http.Transport{TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}}},
@@ -2020,9 +2214,9 @@ index 00000000000..a1dfb1e6746
 +	baseURL := "https://" + app.PublicAddr
 +	system := chatSystemPrompt(s.username)
 +	if agent == agentCodex {
-+		return openAIChat(ctx, client, baseURL, cmp.Or(s.runner.Config.ChatCodexModel, defaultChatCodexModel), system, messages)
++		return openAIChat(ctx, client, baseURL, model, system, messages)
 +	}
-+	return anthropicChat(ctx, client, baseURL, cmp.Or(s.runner.Config.ChatClaudeModel, defaultChatClaudeModel), system, messages)
++	return anthropicChat(ctx, client, baseURL, model, system, messages)
 +}
 +
 +// findLLMApp looks up a Teleport LLM app by name.
@@ -2050,10 +2244,11 @@ index 00000000000..a1dfb1e6746
 +	return llmApp{}, trace.NotFound("no Teleport LLM app named %q", name)
 +}
 +
-+// appCertificate mints a TLS client certificate for the app as the user.
-+func (s beamsSession) appCertificate(ctx context.Context, app llmApp) (tls.Certificate, error) {
++// appCertificate mints a TLS client certificate for the app as the user and
++// returns it with the Teleport app session it opened.
++func (s beamsSession) appCertificate(ctx context.Context, app llmApp) (tls.Certificate, string, error) {
 +	if s.delegation == "" {
-+		return tls.Certificate{}, &needsAuthorizationError{trace.AccessDenied("not connected")}
++		return tls.Certificate{}, "", &needsAuthorizationError{trace.AccessDenied("not connected")}
 +	}
 +	privateKey, response, err := s.runner.mintDelegatedCerts(ctx, s.delegation, s.username, &delegationv1.RouteToApp{
 +		Name:        app.Name,
@@ -2061,17 +2256,25 @@ index 00000000000..a1dfb1e6746
 +		ClusterName: s.runner.ClusterName,
 +	})
 +	if trace.IsAccessDenied(err) || trace.IsNotFound(err) {
-+		return tls.Certificate{}, &needsAuthorizationError{err}
++		return tls.Certificate{}, "", &needsAuthorizationError{err}
 +	}
 +	if err != nil {
-+		return tls.Certificate{}, trace.Wrap(err)
++		return tls.Certificate{}, "", trace.Wrap(err)
 +	}
 +	keyPEM, err := keys.MarshalPrivateKey(privateKey)
 +	if err != nil {
-+		return tls.Certificate{}, trace.Wrap(err)
++		return tls.Certificate{}, "", trace.Wrap(err)
 +	}
 +	cert, err := tls.X509KeyPair(response.GetTls(), keyPEM)
-+	return cert, trace.Wrap(err)
++	if err != nil {
++		return tls.Certificate{}, "", trace.Wrap(err)
++	}
++	sessionID, err := appSessionID(response.GetTls())
++	if err != nil {
++		// The request still works; only the log loses the session ID.
++		logger.Get(ctx).WarnContext(ctx, "Could not read the app session ID", "error", err)
++	}
++	return cert, sessionID, nil
 +}
 +
 +// anthropicChat calls the Messages API. Teleport replaces the API key.
@@ -2548,10 +2751,10 @@ index 00000000000..3903d93e9ba
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..28c96c6a790
+index 00000000000..ba0879e03cc
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,723 @@
+@@ -0,0 +1,732 @@
 +package slack
 +
 +import (
@@ -2628,6 +2831,8 @@ index 00000000000..28c96c6a790
 +// beamsSession is the per-command execution context for one Slack user.
 +type beamsSession struct {
 +	runner      BeamsCommandRunner
++	teamID      string
++	slackUserID string
 +	profileDir  string
 +	username    string
 +	delegation  string
@@ -2653,6 +2858,11 @@ index 00000000000..28c96c6a790
 +		return "", trace.Wrap(err)
 +	}
 +	username := s.username
++
++	if words[0] != "connect" {
++		// Leave session IDs out of the log.
++		s.logRequest(ctx, "slash", text, "command", words[0])
++	}
 +
 +	var out string
 +	switch words[0] {
@@ -2731,6 +2941,8 @@ index 00000000000..28c96c6a790
 +	}
 +	s := beamsSession{
 +		runner:      r,
++		teamID:      teamID,
++		slackUserID: userID,
 +		profileDir:  profileDir,
 +		username:    username,
 +		sessionPath: filepath.Join(profileDir, "delegation-session"),
@@ -3861,7 +4073,7 @@ index a8ecf146bf6..bd8486f3636 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..053187a8893 100644
+index e27fd004c15..9dc429afa91 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -3873,7 +4085,7 @@ index e27fd004c15..053187a8893 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,44 @@ type Config struct {
+@@ -39,12 +41,47 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -3907,6 +4119,9 @@ index e27fd004c15..053187a8893 100644
 +	ChatClaudeModel string `toml:"chat_claude_model"`
 +	ChatCodexModel  string `toml:"chat_codex_model"`
 +	DisableChat     bool   `toml:"disable_chat"`
++	// OmitRequestText leaves what users asked out of the request log, keeping
++	// only who, when, and what kind of request.
++	OmitRequestText bool   `toml:"omit_request_text"`
 +	BotName         string `toml:"bot_name"`
 +	DelegationTTL   string `toml:"delegation_ttl"`
 +	// RequiredRole authorizes Slack users whose email matches a Teleport user
@@ -3918,7 +4133,7 @@ index e27fd004c15..053187a8893 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +165,43 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +168,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -3962,7 +4177,7 @@ index e27fd004c15..053187a8893 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +272,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +275,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

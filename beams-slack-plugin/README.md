@@ -12,7 +12,7 @@ the Teleport `v18.11.1` source (the newest public v18.11 tag) and ships with
 [Versions](#versions). It runs as a container next to `tbot`, talks to Slack
 over Socket Mode, and needs no inbound ports or public URL.
 
-**[Usage](#usage)** · **[Installation](#installation)** ·
+**[Usage](#usage)** · **[Request log](#request-log)** · **[Installation](#installation)** ·
 **[Deploy with Terraform](#deploy-with-terraform)** ·
 **[Development](#development)**
 
@@ -252,6 +252,38 @@ the agent. You can also use `/beams rm <name>`.
 Teleport Beams Bot is an engineer at heart, not a transporter operator, so
 don't ask it for a lift.
 
+## Request log
+
+Teleport records what the bot does on your behalf, but not exactly what you
+asked:
+
+- **Work in a beam** (the bot's agent runs and `/beams claude|codex|exec`) is
+  an SSH command run as you, and Teleport's audit log has the full command
+  line, prompt included.
+- **Chat answers** appear as an app session for you via the bot, plus an
+  `app.session.llm_request` event per request with the model and token
+  counts. Teleport doesn't record the prompt, and plugins can't write their
+  own audit events.
+
+To fill the gap, the plugin logs one structured line per request with the
+message `Beams bot request`:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `chat`, `beam`, `delete`, `list`, or `slash` |
+| `slack_team_id`, `slack_user_id` | Who asked, in Slack |
+| `teleport_user` | The Teleport user it ran as |
+| `request` | What they asked (up to 2,000 characters) |
+| `agent`, `model`, `app` | For chat: Claude or Codex, the model, and the Teleport app |
+| `app_session_id` | For chat: the Teleport app session, matching its `app.session.llm_request` events |
+| `beam`, `continued`, `attachments` | For beam work: the beam, whether the agent conversation continued, and attached file names |
+| `command`, `beams` | The slash command, or the beams deleted |
+
+`/beams connect` is not logged, so session IDs stay out of the logs. Set
+`omit_request_text = true` to log everything except the request text. Ship
+the plugin's logs to the same place as Teleport's audit export to see both
+together.
+
 ## Authorizing the plugin to act as you
 
 Teleport v18 does not let a bot impersonate an SSO user, and only you can
@@ -451,6 +483,7 @@ Start from `config.toml.example`. The Beams settings:
 | `codex_timeout` | `15m` | Limit for `/beams codex` and the bot's Codex runs |
 | `chat_claude_model` | `claude-sonnet-4-5` | Model for chat answers through the `anthropic` app |
 | `chat_codex_model` | `gpt-5` | Model for chat answers through the `openai` app ("use codex") |
+| `omit_request_text` | `false` | Leave what users asked out of the [request log](#request-log) |
 | `disable_chat` | `false` | Send every request to a coding agent in a beam instead of answering chat questions directly |
 | `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
 
