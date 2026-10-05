@@ -166,7 +166,10 @@ The direct message with the instructions, and the reply with the session ID
 Questions about which beams you have ("how many beams do I have", "list my
 beams") are answered straight from `tsh beams ls` in a second or two. Anything
 else starts a Claude Code or Codex session in a beam, which usually takes a minute or
-more; Teleport Beams Bot posts "On it" right away so you know it is working. Teleport Beams Bot works
+more. Teleport Beams Bot acknowledges right away: "Just a moment while I look into
+this." for a new question, followed by a note if the request turns into work in
+a beam, or "On it. Working in your beam" in a thread that already works in
+one. Teleport Beams Bot works
 on one request per thread at a time: if you send another message while it is
 busy, it replies "Still working on your earlier request" and handles your
 newest message as soon as the current one finishes.

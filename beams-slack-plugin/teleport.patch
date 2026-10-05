@@ -77,10 +77,10 @@ index b61b5fe458c..369af314958 100644
  configuring this access request plugin in [Access Requests with Slack](https://goteleport.com/docs/access-controls/access-request-plugins/ssh-approval-slack/).
 diff --git a/integrations/access/slack/beams_app.go b/integrations/access/slack/beams_app.go
 new file mode 100644
-index 00000000000..b0a2d706e0e
+index 00000000000..4cab3ee0d03
 --- /dev/null
 +++ b/integrations/access/slack/beams_app.go
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,320 @@
 +/*
 + * Teleport
 + * Copyright (C) 2026  Gravitational, Inc.
@@ -122,6 +122,7 @@ index 00000000000..b0a2d706e0e
 +	Handle(ctx context.Context, teamID, userID, threadKey, text string) (AskResult, error)
 +	FollowsThread(teamID, userID, threadKey string) bool
 +	Connected(teamID, userID string) bool
++	ThreadUsesBeam(teamID, userID, threadKey string) bool
 +}
 +
 +// BeamsApp consumes /beams commands from Slack Socket Mode.
@@ -258,6 +259,9 @@ index 00000000000..b0a2d706e0e
 +	}
 +}
 +
++// beamWorkReply acknowledges a request that runs in a beam.
++const beamWorkReply = "On it. Working in your beam; this can take a few minutes."
++
 +// Busy-thread notice for messages that arrive while the bot is still working.
 +const botBusyReply = "Still working on your earlier request; I'll pick this up when it's done."
 +
@@ -289,13 +293,21 @@ index 00000000000..b0a2d706e0e
 +		"slack_channel_id", event.Channel,
 +	)
 +	log.InfoContext(ctx, "Handling Beams Slack message")
-+	// Skip "On it" when the answer is instant or the user still has to
-+	// authorize the bot.
++	threadKey := event.Channel + "-" + threadTS
++	// Skip the acknowledgement when the answer is instant or the user still
++	// has to authorize the bot. Threads already working in a beam say so;
++	// others may get a quick chat answer, and the runner reports if the
++	// request moves to a beam.
 +	if announce && !isInstantRequest(request) && a.runner.Connected(event.TeamID, event.User) {
-+		a.reply(ctx, event, threadTS, "On it. Working in your beam; this can take a few minutes.")
++		if a.runner.ThreadUsesBeam(event.TeamID, event.User, threadKey) {
++			a.reply(ctx, event, threadTS, beamWorkReply)
++		} else {
++			a.reply(ctx, event, threadTS, "Just a moment while I look into this.")
++		}
 +	}
++	ctx = withProgress(ctx, func(text string) { a.reply(ctx, event, threadTS, text) })
 +
-+	result, err := a.runner.Handle(ctx, event.TeamID, event.User, event.Channel+"-"+threadTS, request)
++	result, err := a.runner.Handle(ctx, event.TeamID, event.User, threadKey, request)
 +	if err != nil {
 +		result = AskResult{Reply: fmt.Sprintf("Sorry, that failed: %s", trace.UserMessage(err))}
 +		log.WarnContext(ctx, "Beams Slack message failed", "error", err)
@@ -391,10 +403,10 @@ index 00000000000..b0a2d706e0e
 +}
 diff --git a/integrations/access/slack/beams_app_test.go b/integrations/access/slack/beams_app_test.go
 new file mode 100644
-index 00000000000..877bad32469
+index 00000000000..c6667624794
 --- /dev/null
 +++ b/integrations/access/slack/beams_app_test.go
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,171 @@
 +package slack
 +
 +import (
@@ -563,12 +575,15 @@ index 00000000000..877bad32469
 +	defer runner.mu.Unlock()
 +	require.Equal(t, []string{"C1-1.1 make a page", "D1-2.2 the-session-id", "C1-1.1 make a page"}, runner.handled)
 +}
++
++func (r *blockingRunner) ThreadUsesBeam(string, string, string) bool { return true }
++func (r *authRunner) ThreadUsesBeam(string, string, string) bool     { return true }
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..d044aa6d76e
+index 00000000000..3dc668203c9
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,693 @@
 +package slack
 +
 +import (
@@ -624,6 +639,33 @@ index 00000000000..d044aa6d76e
 +	}
 +	text = strings.TrimSpace(text)
 +	return text, text != ""
++}
++
++// ThreadUsesBeam reports whether a request in the thread will run in a beam
++// rather than possibly getting a chat answer.
++func (r BeamsCommandRunner) ThreadUsesBeam(teamID, userID, threadKey string) bool {
++	if !r.chatEnabled() {
++		return true
++	}
++	if !safeSlackID.MatchString(teamID) || !safeSlackID.MatchString(userID) || !safeThreadKey.MatchString(threadKey) {
++		return false
++	}
++	return readThreadState(filepath.Join(r.Config.ProfilesDir, teamID, userID, "threads", threadKey)).beam != ""
++}
++
++type progressKey struct{}
++
++// withProgress attaches a function that posts progress updates to the
++// request's Slack thread.
++func withProgress(ctx context.Context, post func(text string)) context.Context {
++	return context.WithValue(ctx, progressKey{}, post)
++}
++
++// reportProgress posts a progress update, if the caller asked for them.
++func reportProgress(ctx context.Context, text string) {
++	if post, ok := ctx.Value(progressKey{}).(func(string)); ok {
++		post(text)
++	}
 +}
 +
 +// FollowsThread reports whether a Slack user already has a bot
@@ -779,6 +821,12 @@ index 00000000000..d044aa6d76e
 +		default:
 +			chatHistory = history
 +		}
++	}
++
++	// The request is going to a beam. If it started as a possible chat
++	// question, the user was told "Just a moment", so say what's happening.
++	if thread.beam == "" && r.chatEnabled() {
++		reportProgress(ctx, "This needs a computer, so I'm working in one of your beams. This can take a few minutes.")
 +	}
 +
 +	name, continued := chooseBeam(beams, thread.beam, text)
@@ -2044,10 +2092,10 @@ index 00000000000..26e03e88efa
 +}
 diff --git a/integrations/access/slack/beams_chat_test.go b/integrations/access/slack/beams_chat_test.go
 new file mode 100644
-index 00000000000..6f44f52f684
+index 00000000000..551c3ccdb9b
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat_test.go
-@@ -0,0 +1,194 @@
+@@ -0,0 +1,233 @@
 +package slack
 +
 +import (
@@ -2241,6 +2289,45 @@ index 00000000000..6f44f52f684
 +	require.Equal(t, llmApp{Name: "openai", PublicAddr: "openai.example.teleport.sh"}, app)
 +	_, err = runner.findLLMApp(t.Context(), "gemini")
 +	require.Error(t, err)
++}
++
++func TestBotAcknowledgesChatAndBeamWorkDifferently(t *testing.T) {
++	tshPath, _ := writeFakeTSH(t)
++	chat := &fakeChat{}
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++		Chat:         chat.chat,
++	}
++	_, err := runner.Run(t.Context(), "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++	bot := &fakeBeamsBot{}
++	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
++	event := BeamsMessageEvent{TeamID: "T1", User: "UALICE", Channel: "C1", TS: "1700000000.003000"}
++
++	// A chat question gets a short acknowledgement and the answer.
++	app.handleMessage(t.Context(), event, "what should i eat for lunch")
++	require.Equal(t, []string{"Just a moment while I look into this.", "Try the pho place."}, bot.replies)
++
++	// When it turns into beam work, the bot says so before the agent runs.
++	bot.replies = nil
++	event.TS = "1700000000.003100"
++	event.ThreadTS = "1700000000.003000"
++	app.handleMessage(t.Context(), event, "make a webpage about it")
++	require.Equal(t, "Just a moment while I look into this.", bot.replies[0])
++	require.Equal(t, "This needs a computer, so I'm working in one of your beams. This can take a few minutes.", bot.replies[1])
++
++	// From then on the thread works in its beam.
++	bot.replies = nil
++	event.TS = "1700000000.003200"
++	app.handleMessage(t.Context(), event, "make the title bigger")
++	require.Equal(t, beamWorkReply, bot.replies[0])
++	require.Len(t, bot.replies, 2)
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644

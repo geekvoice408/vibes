@@ -259,6 +259,12 @@ model names.
 "delete all my beams" deletes every beam the user owns (`removeTargets` needs
 "all"/"every" plus "beams").
 
+Acknowledgements: the app posts "Just a moment while I look into this." unless
+`ThreadUsesBeam` (thread already has a beam, or chat is off), in which case it
+posts "On it. Working in your beam...". When a possible chat request moves to
+a beam, `Handle` posts "This needs a computer, so I'm working in one of your
+beams..." through `reportProgress` (a callback the app puts in the context).
+
 ### Per-user state (`beams-profiles` volume)
 
 ```text
