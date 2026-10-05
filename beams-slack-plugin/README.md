@@ -525,20 +525,27 @@ Start from `config.toml.example`. The Beams settings:
 | `disable_chat` | `false` | Send every request to a coding agent in a beam instead of answering chat questions directly |
 | `demo_skits` | `false` | Scripted demo replies, below. Leave off outside demos |
 | `demo_ssh_login` | `root` | Login the website demo uses on the app's server |
+| `demo_service_owner` | none | Slack name of the person the demo notifies about the website |
 | `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
 
 #### Demo skits
 
-With `demo_skits = true`, two requests follow a script:
+With `demo_skits = true`, these requests follow a script:
 
 - **"create and update a Zendesk ticket"** replies that ticket #NNNNN (a
   random number) was created and updated. Nothing is sent to Zendesk.
-- **"the live website is down"** is real, run as you through Teleport so every
-  step is in the audit log. The bot lists apps with `tsh apps ls`, takes the one
-  with a `hosted-on` label, checks `systemctl is-active nginx` on that server
-  with `tsh ssh` as `demo_ssh_login`, and if nginx is down offers to start it.
-  Reply "yes" in the thread and it runs `systemctl start nginx` and checks the
-  app's URL with `curl` from the server.
+- **"the live website is down"** is real, and runs from one of your beams
+  (the thread's, your newest, or a new one). Inside a beam `tsh` is already
+  logged in as you, so every step is audited as you. The bot runs
+  `tsh apps ls` there, takes the app with a `hosted-on` label, checks
+  `systemctl is-active nginx` on that server with `tsh ssh` as
+  `demo_ssh_login`, and if nginx is down offers to start it. Reply "yes" in
+  the thread and it runs `systemctl start nginx` (with `sudo -n` for a login
+  other than root) and checks the app's URL with `curl` from the server.
+- **"notify the service owner"** sends `demo_service_owner` a direct message:
+  "There's an issue with the live website." Once the website is fixed in
+  that thread, they get a second one: "The issue was resolved." and why it
+  was down.
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.
