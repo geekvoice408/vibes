@@ -146,9 +146,15 @@ Teleport Beams Bot connects you and then carries out your original request back
 in the thread where you asked it. This is the same connection `/beams connect`
 makes, and it lasts up to 7 days.
 
-<img src="assets/screenshots/bot-authorize-dm.png" alt="Teleport Beams Bot's direct message with the tsh delegation command, and the user's reply with the session ID (hidden)" width="720">
+In the channel, the thread only gets a pointer to the DM, and the request is
+answered there once you're connected:
 
-The tenant name, email, and session ID are hidden in this screenshot.
+<img src="assets/screenshots/bot-authorize-thread.png" alt="The bot replies in the channel thread that it sent a direct message to set up access, then answers the request after the user connects" width="560">
+
+The direct message with the instructions, and the reply with the session ID
+(the tenant name, email, and session ID are hidden):
+
+<img src="assets/screenshots/bot-authorize-dm.png" alt="Teleport Beams Bot's direct message with the tsh delegation command, and the user's reply with the session ID (hidden)" width="720">
 
 Questions about which beams you have ("how many beams do I have", "list my
 beams") are answered straight from `tsh beams ls` in a second or two. Anything
