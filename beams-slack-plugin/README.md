@@ -262,10 +262,13 @@ asked:
   line, prompt included.
 - **Chat answers** appear as an app session for you via the bot, plus an
   `app.session.llm_request` event per request with the model and token
-  counts. Teleport doesn't record the prompt, and plugins can't write their
-  own audit events.
+  counts. Teleport doesn't record the prompt there, and plugins can't write
+  their own audit events. So after answering, the bot also runs a harmless
+  `printf` of the question and answer in one of your beams (the newest), as
+  you. Teleport audits that command like any other, with the question and
+  answer in its command line. If you have no beams, this step is skipped.
 
-To fill the gap, the plugin logs one structured line per request with the
+The plugin also logs one structured line per request with the
 message `Beams bot request`:
 
 | Field | Meaning |

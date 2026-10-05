@@ -287,7 +287,13 @@ Teleport users, request text (<= 2000 chars, off with `omit_request_text`),
 and for chat the app session ID parsed from the app certificate
 (`tlsca.FromSubject` -> `RouteToApp.SessionID`) to join with
 `app.session.llm_request`. `connect` is not logged. Beam work text is already
-in Teleport's audit via the SSH exec command line.
+in Teleport's audit via the SSH exec command line. Chat Q&A gets there the same
+way: after a chat answer (not a handoff), `recordChatInBeam` runs
+`printf '%s\n' 'Teleport Beams Bot chat (<agent>)' 'Q: ...' 'A: ...'` as the
+user via `tsh beams exec` in their newest beam, in a goroutine with
+`context.WithoutCancel` so the answer isn't delayed. Always on (Paul wanted no
+opt-out); skipped only when the user has no beams. Each text is clipped at
+32 KiB to stay under Linux's 128 KiB per-argument limit.
 
 ### Per-user state (`beams-profiles` volume)
 

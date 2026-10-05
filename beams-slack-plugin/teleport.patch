@@ -641,14 +641,15 @@ index 00000000000..ef5fe8bd3e1
 +}
 diff --git a/integrations/access/slack/beams_audit.go b/integrations/access/slack/beams_audit.go
 new file mode 100644
-index 00000000000..deb43c89820
+index 00000000000..50612d2b7db
 --- /dev/null
 +++ b/integrations/access/slack/beams_audit.go
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,93 @@
 +package slack
 +
 +import (
 +	"context"
++	"strings"
 +
 +	"github.com/gravitational/trace"
 +
@@ -660,6 +661,8 @@ index 00000000000..deb43c89820
 +// Plugins cannot write to Teleport's audit log, and its LLM request events
 +// record models and token counts but not prompts. So the bot logs one
 +// structured line per request, which can be shipped alongside the audit log.
++// Chat questions and answers also reach the audit log through
++// recordChatInBeam.
 +// Chat lines carry the Teleport app session ID to match
 +// app.session.llm_request events.
 +const (
@@ -684,6 +687,34 @@ index 00000000000..deb43c89820
 +		args = append(args, "request", text)
 +	}
 +	logger.Get(ctx).InfoContext(ctx, requestLogMessage, args...)
++}
++
++// maxAuditedChatText keeps the recorded command under Linux's 128 KiB limit
++// for a single argument; Slack messages and chat answers fit well within it.
++const maxAuditedChatText = 32 << 10
++
++// recordChatInBeam puts a chat question and answer into Teleport's audit log.
++// Teleport audits non-interactive SSH commands in beams with their full
++// command line and records their output, so the bot runs a harmless printf
++// of both in one of the user's beams, as the user.
++func (s beamsSession) recordChatInBeam(ctx context.Context, beam, agent, question, answer string) {
++	clip := func(text string) string {
++		if len(text) > maxAuditedChatText {
++			return strings.ToValidUTF8(text[:maxAuditedChatText], "") + "…"
++		}
++		return text
++	}
++	command := shellQuoteJoin([]string{
++		"printf", `%s\n`,
++		"Teleport Beams Bot chat (" + agentDisplayName(agent) + ")",
++		"Q: " + clip(question),
++		"A: " + clip(answer),
++	})
++	if _, err := s.userTSH(ctx, "beams", "exec", beam, command); err != nil {
++		logger.Get(ctx).WarnContext(ctx, "Failed to record chat in Teleport's audit log", "beam", beam, "error", err)
++		return
++	}
++	logger.Get(ctx).InfoContext(ctx, "Recorded chat in Teleport's audit log", "beam", beam, "teleport_user", s.username)
 +}
 +
 +// attachmentNames lists attachments for the request log.
@@ -821,10 +852,10 @@ index 00000000000..6e3b0311358
 +}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..a65a6bdb097
+index 00000000000..c7c31ae3524
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,715 @@
+@@ -0,0 +1,719 @@
 +package slack
 +
 +import (
@@ -1066,6 +1097,10 @@ index 00000000000..a65a6bdb097
 +		case !handoff:
 +			if err := writeThreadState(threadPath, threadState{agent: agent}); err != nil {
 +				return AskResult{}, trace.Wrap(err)
++			}
++			if beam, _ := chooseBeam(beams, "", ""); beam != "" {
++				// After the answer is posted, so chat stays fast.
++				go s.recordChatInBeam(context.WithoutCancel(ctx), beam, agent, text, reply)
 +			}
 +			return AskResult{Reply: truncateSlackOutput(strings.Join(append(notes, reply), "\n\n"))}, nil
 +		default:
@@ -2412,10 +2447,10 @@ index 00000000000..0327a354c45
 +}
 diff --git a/integrations/access/slack/beams_chat_test.go b/integrations/access/slack/beams_chat_test.go
 new file mode 100644
-index 00000000000..3903d93e9ba
+index 00000000000..b13626dacb7
 --- /dev/null
 +++ b/integrations/access/slack/beams_chat_test.go
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,361 @@
 +package slack
 +
 +import (
@@ -2429,6 +2464,7 @@ index 00000000000..3903d93e9ba
 +	"strings"
 +	"sync"
 +	"testing"
++	"time"
 +
 +	"github.com/gravitational/trace"
 +	"github.com/stretchr/testify/require"
@@ -2491,7 +2527,7 @@ index 00000000000..3903d93e9ba
 +
 +	calls, err := os.ReadFile(logPath)
 +	require.NoError(t, err)
-+	require.NotContains(t, string(calls), "beams exec", "chat answers must not start a coding agent")
++	require.NotContains(t, string(calls), "'claude'", "chat answers must not start a coding agent")
 +
 +	// A request to build something is handed to a coding agent in a beam,
 +	// with the chat so far as context.
@@ -2748,6 +2784,33 @@ index 00000000000..3903d93e9ba
 +	require.Contains(t, string(calls), "beams exec mine mkdir -p /tmp/slack-attachments")
 +	require.Regexp(t, `beams scp \S+/upload-\d+ mine:/tmp/slack-attachments/my_notes.txt`, string(calls))
 +	require.Contains(t, string(calls), "- /tmp/slack-attachments/my_notes.txt")
++}
++
++func TestChatRecordedInBeamAudit(t *testing.T) {
++	tshPath, logPath := writeFakeTSH(t)
++	chat := &fakeChat{}
++	runner := BeamsCommandRunner{
++		Config: BeamsConfig{
++			TSHPath:     tshPath,
++			ProfilesDir: t.TempDir(),
++			BotName:     "teleport-beams-bot",
++			Users:       map[string]string{"UALICE": "alice@example.com"},
++		},
++		MintIdentity: fakeMint,
++		Chat:         chat.chat,
++	}
++	ctx := t.Context()
++	_, err := runner.Run(ctx, "T1", "UALICE", "connect "+testSessionID)
++	require.NoError(t, err)
++
++	_, err = runner.Ask(ctx, "T1", "UALICE", "C1-1700000000.006000", "what's for lunch?")
++	require.NoError(t, err)
++	// The fake tsh logs with echo, which expands the \n in the printf format.
++	require.Eventually(t, func() bool {
++		calls, _ := os.ReadFile(logPath)
++		return strings.Contains(string(calls), `beams exec mine 'printf'`) &&
++			strings.Contains(string(calls), `'Teleport Beams Bot chat (Claude Code)' 'Q: what'\''s for lunch?' 'A: Try the pho place.'`)
++	}, 5*time.Second, 20*time.Millisecond)
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
