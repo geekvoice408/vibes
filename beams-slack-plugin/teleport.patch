@@ -2814,10 +2814,10 @@ index 00000000000..b13626dacb7
 +}
 diff --git a/integrations/access/slack/beams_commands.go b/integrations/access/slack/beams_commands.go
 new file mode 100644
-index 00000000000..ba0879e03cc
+index 00000000000..3fd11ae8168
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands.go
-@@ -0,0 +1,732 @@
+@@ -0,0 +1,750 @@
 +package slack
 +
 +import (
@@ -3282,7 +3282,13 @@ index 00000000000..ba0879e03cc
 +		if runCtx.Err() != nil {
 +			return "", stderr, trace.LimitExceeded("command timed out")
 +		}
-+		return "", stderr, trace.Wrap(err, stderr)
++		// A command that fails in a beam, such as a coding agent hitting a
++		// model error, explains why on stdout, so keep the end of it.
++		detail := stderr
++		if tail := outputTail(outBuf.String()); tail != "" {
++			detail = tail + "\n" + stderr
++		}
++		return "", stderr, trace.Wrap(err, detail)
 +	}
 +	return stripANSI(outBuf.String()), "", nil
 +}
@@ -3385,6 +3391,18 @@ index 00000000000..ba0879e03cc
 +		lines = append(lines, line)
 +	}
 +	return strings.TrimSpace(strings.Join(lines, "\n"))
++}
++
++// maxFailureOutput bounds how much of a failed command's output is reported.
++const maxFailureOutput = 1000
++
++// outputTail returns the end of a failed command's output.
++func outputTail(stdout string) string {
++	tail := strings.TrimSpace(stripANSI(stdout))
++	if len(tail) > maxFailureOutput {
++		tail = "…" + strings.ToValidUTF8(tail[len(tail)-maxFailureOutput:], "")
++	}
++	return tail
 +}
 +
 +func stripANSI(s string) string {
@@ -3552,10 +3570,10 @@ index 00000000000..ba0879e03cc
 +}
 diff --git a/integrations/access/slack/beams_commands_test.go b/integrations/access/slack/beams_commands_test.go
 new file mode 100644
-index 00000000000..304bc30ad28
+index 00000000000..33be7d765f3
 --- /dev/null
 +++ b/integrations/access/slack/beams_commands_test.go
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,266 @@
 +package slack
 +
 +import (
@@ -3803,6 +3821,24 @@ index 00000000000..304bc30ad28
 +	attempts, err := os.ReadFile(counter)
 +	require.NoError(t, err)
 +	require.Equal(t, "3\n", string(attempts))
++}
++
++func TestFailedCommandReportsOutput(t *testing.T) {
++	dir := t.TempDir()
++	tshPath := filepath.Join(dir, "tsh")
++	script := `#!/bin/sh
++echo "API Error: 403 invalid session"
++echo "ERROR: Process exited with status 1" >&2
++exit 1
++`
++	require.NoError(t, os.WriteFile(tshPath, []byte(script), 0o700))
++	s := beamsSession{runner: BeamsCommandRunner{Config: BeamsConfig{TSHPath: tshPath}}, profileDir: dir}
++	_, _, err := s.tshOnce(t.Context(), "/identity", "beams", "exec", "mine", "claude -p hi")
++	require.Error(t, err)
++	require.Contains(t, trace.UserMessage(err), "API Error: 403 invalid session")
++	require.Contains(t, trace.UserMessage(err), "Process exited with status 1")
++
++	require.Equal(t, "…"+strings.Repeat("b", maxFailureOutput-1)+"c", outputTail(strings.Repeat("a", 50)+strings.Repeat("b", maxFailureOutput-1)+"c\n"))
 +}
 diff --git a/integrations/access/slack/beams_files.go b/integrations/access/slack/beams_files.go
 new file mode 100644

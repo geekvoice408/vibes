@@ -293,7 +293,14 @@ way: after a chat answer (not a handoff), `recordChatInBeam` runs
 user via `tsh beams exec` in their newest beam, in a goroutine with
 `context.WithoutCancel` so the answer isn't delayed. Always on (Paul wanted no
 opt-out); skipped only when the user has no beams. Each text is clipped at
-32 KiB to stay under Linux's 128 KiB per-argument limit.
+32 KiB to stay under Linux's 128 KiB per-argument limit. To see these, query
+`exec` events (the session list and `tsh recordings ls` show only
+`session.end`, which has no command).
+
+Failed tsh commands include the last 1000 bytes of stdout in the error
+(`outputTail`), since a coding agent explains failures there (for example a
+model API error after ~3 minutes of retries) and stderr only says "Process
+exited with status 1".
 
 ### Per-user state (`beams-profiles` volume)
 
