@@ -4094,10 +4094,10 @@ index 00000000000..33be7d765f3
 +}
 diff --git a/integrations/access/slack/beams_demo.go b/integrations/access/slack/beams_demo.go
 new file mode 100644
-index 00000000000..1377c2562d1
+index 00000000000..44512a3f6ad
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo.go
-@@ -0,0 +1,364 @@
+@@ -0,0 +1,377 @@
 +package slack
 +
 +import (
@@ -4147,6 +4147,8 @@ index 00000000000..1377c2562d1
 +	URI   string `json:"uri"`
 +	// Status is what systemctl reported for nginx when the site was down.
 +	Status string `json:"status"`
++	// Ticket is the made-up Zendesk ticket opened for the issue.
++	Ticket int `json:"ticket"`
 +}
 +
 +func demoFixPath(threadPath string) string {
@@ -4187,6 +4189,9 @@ index 00000000000..1377c2562d1
 +					if note := s.demoTellOwnerResolved(ctx, threadPath, fix); note != "" {
 +						reply += "\n\n" + note
 +					}
++					if fix.Ticket != 0 {
++						reply += fmt.Sprintf("\n\nI've updated Zendesk ticket #%d with the fix.", fix.Ticket)
++					}
 +				}
 +				return reply, true, nil
 +			case noReply.MatchString(text):
@@ -4196,20 +4201,27 @@ index 00000000000..1377c2562d1
 +	}
 +
 +	var parts []string
-+	if demoTicketRequest.MatchString(text) {
-+		parts = append(parts, fmt.Sprintf("I've created and updated Zendesk ticket #%d.", 40000+rand.IntN(60000)))
-+	}
-+	if demoWebsiteDown.MatchString(text) {
-+		found, err := s.demoCheckWebsite(ctx, threadPath, beams, threadBeam, text)
++	target, owner, notify := demoNotifyTarget(text)
++	switch {
++	case demoWebsiteDown.MatchString(text):
++		// The whole incident response: tell the service owner (or whoever
++		// the request names), open a ticket, then check the website.
++		parts = append(parts, s.demoTellOwner(ctx, threadPath, target))
++		ticket := 40000 + rand.IntN(60000)
++		parts = append(parts, fmt.Sprintf("I've created Zendesk ticket #%d.", ticket))
++		found, err := s.demoCheckWebsite(ctx, threadPath, beams, threadBeam, text, ticket)
 +		if err != nil {
 +			return "", true, trace.Wrap(err)
 +		}
 +		parts = append(parts, found)
-+	}
-+	// Telling someone is part of the skit when it's about the website or its
-+	// owner; other "tell" requests are for the bot's usual messaging.
-+	if target, owner, ok := demoNotifyTarget(text); ok && (owner || demoWebsiteDown.MatchString(text)) {
-+		parts = append(parts, s.demoTellOwner(ctx, threadPath, target))
++	default:
++		if demoTicketRequest.MatchString(text) {
++			parts = append(parts, fmt.Sprintf("I've created and updated Zendesk ticket #%d.", 40000+rand.IntN(60000)))
++		}
++		// Other "tell" requests are for the bot's usual messaging.
++		if notify && owner {
++			parts = append(parts, s.demoTellOwner(ctx, threadPath, target))
++		}
 +	}
 +	if len(parts) == 0 {
 +		return "", false, nil
@@ -4220,7 +4232,7 @@ index 00000000000..1377c2562d1
 +
 +// demoCheckWebsite finds the app with a hosted-on label and checks nginx on
 +// that server. If nginx is down, it offers to start it.
-+func (s beamsSession) demoCheckWebsite(ctx context.Context, threadPath string, beams []map[string]any, threadBeam, text string) (string, error) {
++func (s beamsSession) demoCheckWebsite(ctx context.Context, threadPath string, beams []map[string]any, threadBeam, text string, ticket int) (string, error) {
 +	beam, _ := chooseBeam(beams, threadBeam, text)
 +	if beam == "" {
 +		reportProgress(ctx, "Starting a beam to work from…")
@@ -4278,6 +4290,7 @@ index 00000000000..1377c2562d1
 +	}
 +
 +	fix.Status = status
++	fix.Ticket = ticket
 +	data, err := json.Marshal(fix)
 +	if err != nil {
 +		return "", trace.Wrap(err)
@@ -4464,16 +4477,17 @@ index 00000000000..1377c2562d1
 +}
 diff --git a/integrations/access/slack/beams_demo_test.go b/integrations/access/slack/beams_demo_test.go
 new file mode 100644
-index 00000000000..3cdf8ea5c50
+index 00000000000..b7e4df2a416
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo_test.go
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,159 @@
 +package slack
 +
 +import (
 +	"context"
 +	"os"
 +	"path/filepath"
++	"regexp"
 +	"strings"
 +	"testing"
 +
@@ -4532,8 +4546,11 @@ index 00000000000..3cdf8ea5c50
 +	require.NoError(t, err)
 +	require.Regexp(t, `^I've created and updated Zendesk ticket #\d{5}\.$`, out)
 +
-+	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "the live website is down, notify the service owner there is an issue with their website")
++	// "live website is down" alone runs the whole incident response.
++	out, err = runner.Ask(ctx, "T1", "UALICE", thread, "live website is down")
 +	require.NoError(t, err)
++	require.Regexp(t, `^I contacted the service owner on your behalf\.\n\nI've created Zendesk ticket #(\d{5})\.\n\n`, out)
++	ticket := regexp.MustCompile(`ticket #(\d{5})`).FindStringSubmatch(out)[1]
 +	require.Contains(t, out, "I contacted the service owner on your behalf.")
 +	require.Equal(t, []string{"UPAUL  There's an issue with the live website."}, slack.posts)
 +	require.Contains(t, out, "Found the `livewebsite` app in Teleport, labeled `hosted-on: phall-test`")
@@ -4546,6 +4563,7 @@ index 00000000000..3cdf8ea5c50
 +	require.Contains(t, out, "Started nginx on `phall-test`, and it's *active*")
 +	require.Contains(t, out, "HTTP 200")
 +	require.Contains(t, out, "Let the service owner know it's resolved, and why it was down.")
++	require.Contains(t, out, "I've updated Zendesk ticket #"+ticket+" with the fix.")
 +	require.Len(t, slack.posts, 2)
 +	require.Equal(t, "UPAUL  The issue was resolved. The live website was down because nginx had stopped on `phall-test` (it was *inactive*). I started nginx, and the site answers again.", slack.posts[1])
 +	calls, err := os.ReadFile(logPath)

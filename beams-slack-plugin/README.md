@@ -532,22 +532,25 @@ Start from `config.toml.example`. The Beams settings:
 
 With `demo_skits = true`, these requests follow a script:
 
-- **"create and update a Zendesk ticket"** replies that ticket #NNNNN (a
-  random number) was created and updated. Nothing is sent to Zendesk.
-- **"the live website is down"** is real, and runs from one of your beams
-  (the thread's, your newest, or a new one). Inside a beam `tsh` is already
-  logged in as you, so every step is audited as you. The bot runs
-  `tsh apps ls` there, takes the app with a `hosted-on` label, checks
-  `systemctl is-active nginx` on that server with `tsh ssh` as
-  `demo_ssh_login`, and if nginx is down offers to start it. Reply "yes" in
-  the thread and it runs `systemctl start nginx` (with `sudo -n` for a login
-  other than root) and checks the app's URL with `curl` from the server.
-- **"notify the service owner"**, or "tell Paul…", "let Paul Hall know…",
-  "DM Paul…" alongside the website request, sends that person (or
-  `demo_service_owner`) a direct message: "There's an issue with the live
-  website." When a first name matches several people, the service owner wins
-  if they're one of them. Once the website is fixed in that thread, they get
-  a second one: "The issue was resolved." and why it was down.
+- **"live website is down"** runs the whole incident response:
+  1. Sends `demo_service_owner` (or whoever the message names, as in "tell
+     Paul Hall") a direct message, "There's an issue with the live website.",
+     and says "I contacted the service owner on your behalf."
+  2. Says it created Zendesk ticket #NNNNN, a random number. Nothing is sent
+     to Zendesk.
+  3. Checks the website for real, from one of your beams (the thread's, your
+     newest, or a new one). Inside a beam `tsh` is already logged in as you,
+     so every step is audited as you. The bot runs `tsh apps ls` there, takes
+     the app with a `hosted-on` label, and checks `systemctl is-active nginx`
+     on that server with `tsh ssh` as `demo_ssh_login`. If nginx is down, it
+     offers to start it.
+  4. Reply "yes" in the thread and it runs `systemctl start nginx` (with
+     `sudo -n` for a login other than root), checks the app's URL with `curl`
+     from the server, sends the owner a second message ("The issue was
+     resolved." and why it was down), and says it updated the ticket.
+- **"create and update a Zendesk ticket"** on its own replies with a made-up
+  ticket number, and **"notify the service owner"** on its own sends the
+  first message.
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.

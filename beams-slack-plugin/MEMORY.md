@@ -301,7 +301,12 @@ Without --dangerously-skip-permissions and without plan mode, -p runs stop at
 the first denied tool and report `permission_denials` in --output-format
 json; plan mode was chosen so the whole plan is approved at once.
 
-Demo skits (`beams_demo.go`, `demo_skits`, off by default): "zendesk" +
+Demo skits (`beams_demo.go`, `demo_skits`, off by default). Paul's demo
+trigger is just "live website is down", which runs everything in order: DM
+the owner (or a person the message names) and say "I contacted the service
+owner on your behalf.", "I've created Zendesk ticket #N." (N saved in the
+fix as `Ticket`), then the website check; after "yes" and a working fix it
+adds "I've updated Zendesk ticket #N with the fix." Details: "zendesk" +
 "ticket" replies with a made-up ticket number (no Zendesk call). "live
 website ... down" runs tsh inside a beam (thread's, newest, or a new one;
 `demoTSH` = `tsh beams exec <beam> "'tsh' ..."`, since tsh in a beam is
