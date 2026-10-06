@@ -42,6 +42,10 @@ over Socket Mode, and needs no inbound ports or public URL.
 - **`/beams` slash commands**: list, create, run commands in, publish, copy
   files to, and delete beams directly. Replies are private to you.
 
+**Video:** [watch Teleport Beams Bot handle a website outage and fix a page
+with Codex](assets/video/teleport-beams-bot.mp4) (3½ minutes; the walkthrough
+starts at about 1:25).
+
 Ask for a web page and get back a URL you can open:
 
 <img src="assets/screenshots/bot-publish-webpage.png" alt="Teleport Beams Bot builds a page about Seattle's Ballard neighborhood in a beam and replies with the published URL" width="560">
