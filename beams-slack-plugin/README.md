@@ -227,7 +227,7 @@ Ask the bot to pass something on, and it messages that person for you:
 > @Teleport Beams Bot there's an incident on the production webserver, tell
 > Anna the website is down and write a script to test connectivity
 
-- **Who:** use a name ("Anna", "Anna Mikhailova", or a Slack handle) or an
+- **Who:** use a name ("Anna", or a Slack handle) or an
   @-mention. The bot looks the name up in your Slack workspace
   (`users:read`). If more than one person matches, or nobody does, it says so
   and doesn't send anything; give a fuller name to pick one.
