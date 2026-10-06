@@ -218,6 +218,8 @@ runs the whole response in the thread:
 
 Reply "no" to leave the server as it is.
 
+<img src="assets/screenshots/bot-incident-response.png" alt="Asked 'the live website is down', Teleport Beams Bot contacts the service owner, opens a ticket, finds the livewebsite app hosted on webserver, connects from the user's beam as paul_hall and finds nginx inactive, then after the user replies yes starts nginx, gets HTTP 200, tells the service owner it's resolved, and updates the ticket" width="560">
+
 ### Telling people
 
 Ask the bot to pass something on, and it messages that person for you:
