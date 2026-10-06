@@ -366,13 +366,17 @@ with `to_slack_user_id`. Paul asked for incident notes to add "we're on it".
 generated `bot-<name>` role does nothing, since the tbot output carries the
 bot's assigned roles, not that one.
 
-Video (vibes only, 2026-10-06): `assets/video/teleport-beams-bot.mp4`
-(9.3 MB, 3:30, from Paul's "video_final.mp4"), linked near the top of the
-vibes README. It must not go to stuff: it shows the tenant name, Paul's
-geekvoice email and IPs in journalctl output, coworkers' faces and names in
-a call sidebar, and the #demo channel; the audio wasn't reviewed. So the
-READMEs now differ by that one link: when syncing README from stuff to
-vibes, keep the video paragraph instead of copying the file over.
+Video (2026-10-06): `assets/video/teleport-beams-bot.mp4` (18.6 MB, 3:30)
+in both repos, linked near the top of the README. It's Paul's
+"video_final.mp4" with the call sidebar's name labels painted over (Paul
+wanted it public with only the names removed; he said nothing else in it is
+sensitive, though it shows the tenant name, his geekvoice email and IPs in
+journalctl, and the #demo channel). Redacted without ffmpeg using a Swift
+AVAssetReader/Writer tool in the session scratchpad: from 86.0s to 205.5s,
+four label rects (x from 1728, the sidebar's left edge) are filled with the
+frame's own sidebar colour sampled at (1745,160), so they follow the fade
+at ~203.5-204.6s; audio passed through. GitHub doesn't play a committed mp4
+inline, so the README links it.
 
 Demo setup on the tenant: app `livewebsite` (label `hosted-on: webserver`,
 URI http://127.0.0.1) on node `webserver` (renamed from phall-test, same
