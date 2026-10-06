@@ -301,7 +301,19 @@ Without --dangerously-skip-permissions and without plan mode, -p runs stop at
 the first denied tool and report `permission_denials` in --output-format
 json; plan mode was chosen so the whole plan is approved at once.
 
-Demo skits (`beams_demo.go`, `demo_skits`, off by default). Paul's demo
+Settings renamed 2026-10-06 so the README doesn't read as a demo:
+`demo_skits` -> `incident_response`, `demo_ssh_login` ->
+`incident_ssh_login`, `demo_service_owner` -> `service_owner` (Go fields
+and file names still say Demo/demo); request log kind `demo` -> `incident`.
+README frames the bot as an operations agent (incident response, work in
+beams with approval, telling people); "chat answers" are called quick
+answers there, and the lunch example and bot-chat-answer.png were dropped
+(Paul: "remove stuff that makes it sound like its just a chatbot"). The
+ticket step is described honestly as not connected to Zendesk.
+`beamsIntro(incidentResponse)` is now a function and adds the incident line
+only when it's on.
+
+Demo skits (`beams_demo.go`, `incident_response`, off by default). Paul's demo
 trigger is just "live website is down", which runs everything in order: DM
 the owner (or a person the message names) and say "I contacted the service
 owner on your behalf.", "I've created Zendesk ticket #N." (N saved in the
@@ -312,7 +324,7 @@ website ... down" runs tsh inside a beam (thread's, newest, or a new one;
 `demoTSH` = `tsh beams exec <beam> "'tsh' ..."`, since tsh in a beam is
 logged in as the owner via a delegation session; Paul wanted beams used, not
 the plugin's own tsh): `tsh apps ls`, takes the app with a `hosted-on`
-label, runs `tsh ssh <demo_ssh_login>@<host> "systemctl is-active nginx ||
+label, runs `tsh ssh <incident_ssh_login>@<host> "systemctl is-active nginx ||
 true"`, and if not active writes
 `threads/<key>.demo-fix` and offers to start it; the next message in the
 thread ("yes"/"no") consumes it: `systemctl start nginx` (sudo -n if the
@@ -323,8 +335,8 @@ owner/him/her/them; me/us are ignored); it only counts when the message also
 has the website-down phrase or names the owner, so ordinary "tell" requests
 still go to chat. The first demo run said "tell Paul" and got no DM because
 only "owner" was recognised then. `demoRecipient` uses FindPeople and, when
-a name matches several people, picks `demo_service_owner` if among them. It
-DMs `demo_service_owner` or the named person (looked up with FindPeople) "There's an issue with the live website." and records them
+a name matches several people, picks `service_owner` if among them. It
+DMs `service_owner` or the named person (looked up with FindPeople) "There's an issue with the live website." and records them
 in `threads/<key>.demo-owner`; a successful fix in that thread DMs "The
 issue was resolved." plus the reason (nginx had stopped on <host>, with the
 systemctl status saved in the fix). Runs before delete/list/chat in Handle.
@@ -356,9 +368,9 @@ bot's assigned roles, not that one.
 
 Demo setup on the tenant: app `livewebsite` (label `hosted-on: webserver`,
 URI http://127.0.0.1) on node `webserver` (renamed from phall-test, same
-resource ID; Debian 13, nginx). Ventura's config.toml has `demo_skits =
-true`, `demo_ssh_login = "paul_hall"` (Paul's choice, not root) and
-`demo_service_owner = "Paul Hall"`. paul_hall has passwordless sudo for
+resource ID; Debian 13, nginx). Ventura's config.toml has `incident_response =
+true`, `incident_ssh_login = "paul_hall"` (Paul's choice, not root) and
+`service_owner = "Paul Hall"`. paul_hall has passwordless sudo for
 `systemctl start nginx` (checked 2026-10-05 from a beam). Not verified:
 whether paul@geekvoice.net (whose beams the Slack user gets) has the
 paul_hall login; paul.hall@goteleport.com does (root, paul_hall, beams).

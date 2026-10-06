@@ -869,10 +869,10 @@ index 00000000000..6e3b0311358
 +}
 diff --git a/integrations/access/slack/beams_bot.go b/integrations/access/slack/beams_bot.go
 new file mode 100644
-index 00000000000..3a49cc0605f
+index 00000000000..dd288ca752d
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot.go
-@@ -0,0 +1,808 @@
+@@ -0,0 +1,817 @@
 +package slack
 +
 +import (
@@ -1003,18 +1003,27 @@ index 00000000000..3a49cc0605f
 +}
 +
 +// beamsIntro summarizes https://goteleport.com/docs/beams/ in terms of what
-+// this Slack integration can do.
-+const beamsIntro = `*Teleport Beams* are short-lived computers in the cloud where AI assistants can do work for you, safely. Each beam belongs to you, everything done in it is recorded under your name, and it cleans itself up after a day.
++// this Slack integration can do. The incident line appears only when incident
++// response is on.
++func beamsIntro(incidentResponse bool) string {
++	var b strings.Builder
++	b.WriteString(`I get things done for you through Teleport. I work in *Teleport Beams*: short-lived computers in the cloud where AI agents can work safely. Each beam belongs to you, everything done in it is recorded under your name, and it cleans itself up after a day.
 +
 +Here's what you can do, right here in Slack:
-+• *Ask me for things in plain English.* For example: "@Teleport Beams Bot make a webpage about things to do in Ballard and share it." I'll do the work in one of your beams and reply with a link.
++`)
++	if incidentResponse {
++		b.WriteString(`• *Report a problem.* "@Teleport Beams Bot live website is down": I'll contact the service owner, open a ticket, diagnose the server behind the site through Teleport, and offer the fix.
++`)
++	}
++	b.WriteString(`• *Get work done.* "@Teleport Beams Bot make a webpage about things to do in Ballard and share it." I'll show you my plan, and once you say yes, do the work in one of your beams and reply with a link.
++• *Loop people in.* "tell Anna the website is down" and I'll message her right away.
 +• *Keep going in the same thread* to make changes, like "make the title bigger."
-+• *Share what you made.* Ask me to publish it and I'll give you a link you can open after signing in to Teleport.
-+• *See your beams* by asking "how many beams do I have?"
-+• *Start fresh* by asking for a new beam.
++• *Manage your beams*: "how many beams do I have?", "create a new beam", or "delete this beam".
 +
 +Comfortable with commands? ` + "`/beams help`" + ` lists everything, including running Claude Code or Codex yourself.
-+Learn more: https://goteleport.com/docs/beams/`
++Learn more: https://goteleport.com/docs/beams/`)
++	return b.String()
++}
 +
 +// isInstantRequest reports whether the bot answers a request immediately,
 +// without Teleport or a Claude run.
@@ -1034,7 +1043,7 @@ index 00000000000..3a49cc0605f
 +		return AskResult{Reply: beamMeUpReplies[rand.IntN(len(beamMeUpReplies))]}, nil
 +	}
 +	if isBeamsIntroQuestion(text) {
-+		return AskResult{Reply: beamsIntro}, nil
++		return AskResult{Reply: beamsIntro(r.Config.DemoSkits)}, nil
 +	}
 +	s, err := r.newSession(ctx, teamID, userID)
 +	if err != nil {
@@ -1683,10 +1692,10 @@ index 00000000000..3a49cc0605f
 +}
 diff --git a/integrations/access/slack/beams_bot_test.go b/integrations/access/slack/beams_bot_test.go
 new file mode 100644
-index 00000000000..99aff591af0
+index 00000000000..970ab986a4d
 --- /dev/null
 +++ b/integrations/access/slack/beams_bot_test.go
-@@ -0,0 +1,564 @@
+@@ -0,0 +1,566 @@
 +package slack
 +
 +import (
@@ -2008,14 +2017,16 @@ index 00000000000..99aff591af0
 +	runner := BeamsCommandRunner{Config: BeamsConfig{TSHPath: "/nonexistent/tsh", ProfilesDir: t.TempDir()}}
 +	out, err := runner.Ask(t.Context(), "T1", "UNOBODY", "C1-1700000000.000700", "what can I do with beams?")
 +	require.NoError(t, err)
-+	require.Equal(t, beamsIntro, out)
++	require.Equal(t, beamsIntro(false), out)
++	require.NotContains(t, out, "live website")
++	require.Contains(t, beamsIntro(true), "live website is down")
 +	require.Contains(t, out, "/beams help")
 +	require.Contains(t, out, "https://goteleport.com/docs/beams/")
 +
 +	bot := &fakeBeamsBot{}
 +	app := &BeamsApp{bot: bot, runner: runner, seen: newRecentSet(10), threads: newThreadQueue()}
 +	app.handleMessage(t.Context(), BeamsMessageEvent{TeamID: "T1", User: "UNOBODY", Channel: "C1", TS: "1700000000.000800"}, "what are beams")
-+	require.Equal(t, []string{beamsIntro}, bot.replies, "no \"On it\" message for instant answers")
++	require.Equal(t, []string{beamsIntro(false)}, bot.replies, "no \"On it\" message for instant answers")
 +}
 +
 +func TestRequestedAgent(t *testing.T) {
@@ -4094,7 +4105,7 @@ index 00000000000..33be7d765f3
 +}
 diff --git a/integrations/access/slack/beams_demo.go b/integrations/access/slack/beams_demo.go
 new file mode 100644
-index 00000000000..44512a3f6ad
+index 00000000000..f5685b913b9
 --- /dev/null
 +++ b/integrations/access/slack/beams_demo.go
 @@ -0,0 +1,377 @@
@@ -4115,7 +4126,7 @@ index 00000000000..44512a3f6ad
 +	"github.com/gravitational/teleport/integrations/lib/logger"
 +)
 +
-+// Scripted demo requests, on only with demo_skits. The Zendesk ticket is made
++// Scripted incident response, on only with incident_response. The Zendesk ticket is made
 +// up; the website check is real: tsh runs inside one of the user's beams,
 +// where it is logged in as the user, so every step is audited as them.
 +var (
@@ -4180,7 +4191,7 @@ index 00000000000..44512a3f6ad
 +		if err := json.Unmarshal(data, &fix); err == nil {
 +			switch {
 +			case yesReply.MatchString(text):
-+				s.logRequest(ctx, "demo", text)
++				s.logRequest(ctx, "incident", text)
 +				reply, fixed, err := s.demoStartNginx(ctx, fix)
 +				if err != nil {
 +					return "", true, trace.Wrap(err)
@@ -4226,7 +4237,7 @@ index 00000000000..44512a3f6ad
 +	if len(parts) == 0 {
 +		return "", false, nil
 +	}
-+	s.logRequest(ctx, "demo", text)
++	s.logRequest(ctx, "incident", text)
 +	return strings.Join(parts, "\n\n"), true, nil
 +}
 +
@@ -4407,7 +4418,7 @@ index 00000000000..44512a3f6ad
 +	ownerName := s.runner.Config.DemoServiceOwner
 +	switch {
 +	case target == "" && ownerName == "":
-+		return nil, "I don't know who owns the live website. Set `demo_service_owner` to their Slack name."
++		return nil, "I don't know who owns the live website. Set `service_owner` to their Slack name."
 +	case s.runner.FindPeople == nil || s.runner.Post == nil:
 +		return nil, "I can't send Slack messages from here."
 +	}
@@ -5339,7 +5350,7 @@ index a8ecf146bf6..bd8486f3636 100644
 \ No newline at end of file
 +severity = "INFO" # Logger severity. Could be "INFO", "ERROR", "DEBUG" or "WARN".
 diff --git a/integrations/access/slack/config.go b/integrations/access/slack/config.go
-index e27fd004c15..00e266ae8bd 100644
+index e27fd004c15..88db1860eda 100644
 --- a/integrations/access/slack/config.go
 +++ b/integrations/access/slack/config.go
 @@ -21,6 +21,8 @@ package slack
@@ -5351,7 +5362,7 @@ index e27fd004c15..00e266ae8bd 100644
  	"strings"
  
  	"github.com/go-resty/resty/v2"
-@@ -39,12 +41,58 @@ type Config struct {
+@@ -39,12 +41,59 @@ type Config struct {
  	common.BaseConfig
  	Slack               common.GenericAPIConfig
  	Review              ReviewConfig
@@ -5391,14 +5402,15 @@ index e27fd004c15..00e266ae8bd 100644
 +	// ClaudeSkipApproval lets Claude Code act on bot requests without the
 +	// user approving a plan first. /beams claude never asks.
 +	ClaudeSkipApproval bool `toml:"claude_skip_approval"`
-+	// DemoSkits turns on scripted demo requests: a made-up Zendesk ticket,
-+	// and checking and starting nginx on the server behind the live website.
-+	DemoSkits bool `toml:"demo_skits"`
++	// DemoSkits turns on incident response for "live website is down":
++	// notifying the service owner, a ticket number (not connected to Zendesk),
++	// and checking and starting nginx on the server behind the website.
++	DemoSkits bool `toml:"incident_response"`
 +	// DemoSSHLogin is the login for that server; defaults to root.
-+	DemoSSHLogin string `toml:"demo_ssh_login"`
++	DemoSSHLogin string `toml:"incident_ssh_login"`
 +	// DemoServiceOwner is the Slack name of the live website's owner, who
 +	// gets direct messages about the issue and its fix.
-+	DemoServiceOwner string `toml:"demo_service_owner"`
++	DemoServiceOwner string `toml:"service_owner"`
 +	BotName          string `toml:"bot_name"`
 +	DelegationTTL    string `toml:"delegation_ttl"`
 +	// RequiredRole authorizes Slack users whose email matches a Teleport user
@@ -5410,7 +5422,7 @@ index e27fd004c15..00e266ae8bd 100644
  type ReviewConfig struct {
  	Enabled bool `toml:"enabled"`
  	// AppToken is the app-level token used for Slack Socket Mode API.
-@@ -131,6 +179,43 @@ func (c *Config) CheckAndSetDefaults() error {
+@@ -131,6 +180,43 @@ func (c *Config) CheckAndSetDefaults() error {
  		}
  	}
  
@@ -5454,7 +5466,7 @@ index e27fd004c15..00e266ae8bd 100644
  	if c.Log.Output == "" {
  		c.Log.Output = "stderr"
  	}
-@@ -201,6 +286,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
+@@ -201,6 +287,8 @@ func (c *Config) NewBot(clusterName, webProxyAddr string) (common.MessagingBot,
  		clusterName:  clusterName,
  		webProxyURL:  webProxyURL,
  		reviewConfig: c.Review,

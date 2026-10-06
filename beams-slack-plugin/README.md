@@ -2,9 +2,13 @@
 
 <img src="assets/slack-beams-bot.png" alt="Teleport Beams Bot" width="128" align="right">
 
-Manage [Teleport Beams](https://goteleport.com/) from Slack, either with a
-`/beams` slash command or by asking the **Teleport Beams Bot** in plain language ("@Teleport Beams Bot
-make a webpage about things to do in Seattle and publish it").
+An operations agent in Slack that works through Teleport. Tell the **Teleport
+Beams Bot** what's wrong or what you need ("@Teleport Beams Bot live website is
+down", "@Teleport Beams Bot build a status page and publish it") and it does
+the work in [Teleport Beams](https://goteleport.com/docs/beams/), reaches your
+servers and apps through Teleport, keeps the right people informed, and asks
+before it changes anything. Everything runs as you and lands in Teleport's
+audit log. There's also a `/beams` slash command for direct control.
 
 It is Teleport's Slack access plugin with a Beams app added. It is built from
 the Teleport `v18.11.1` source (the newest public v18.11 tag) and ships with
@@ -18,21 +22,25 @@ over Socket Mode, and needs no inbound ports or public URL.
 
 ## What it does
 
+- **Incident response**: say "live website is down" and the bot notifies the
+  service owner, opens a ticket, finds the server behind the site through
+  Teleport, diagnoses the problem, and offers to fix it. Say yes, and it
+  fixes it, verifies the site, and tells the owner it's resolved and why.
+- **Real work in beams**: Claude Code or Codex runs in one of your beams to
+  write and run code, build pages and services, and publish them behind
+  Teleport. Claude proposes a plan and waits for your yes before changing
+  anything.
+- **Keeps people informed**: "tell Anna the site is down" messages Anna in
+  the thread, or by direct message, right away.
+- **Acts as you, on the record**: every action runs as your own Teleport
+  user through a delegation you approve (up to 7 days), so it can only reach
+  what you can, beams it creates are yours, and every step is in Teleport's
+  audit log under your name.
+- **Who you are**: the plugin matches your Slack email to your Teleport user
+  and lets you in only if that user has the configured role (`beam-user`). No
+  list of Slack IDs to maintain.
 - **`/beams` slash commands**: list, create, run commands in, publish, copy
-  files to, and delete beams. Replies are private to the person who ran them.
-- **Teleport Beams Bot**: mention `@Teleport Beams Bot`, DM it, or start a
-  message with "Teleport Beams Bot". Questions get a quick answer from Claude
-  or Codex through Teleport, with every request in the audit log. Requests
-  that need a computer go to one of your beams, where Claude Code or Codex does
-  the work, publishes the result if asked, and replies in a thread. Replies in
-  that thread continue the same conversation.
-- **Who you are**: the plugin looks up your Slack email, finds the Teleport
-  user with that username, and lets you in only if that user has the
-  configured role (`beam-user`). No list of Slack IDs to maintain.
-- **Acts as you**: every beam action runs as your own Teleport user, so you
-  own your beams, can open their published URLs, and only see your own. You
-  authorize this once (up to 7 days) with a `tsh` command the plugin gives
-  you.
+  files to, and delete beams directly. Replies are private to you.
 
 Ask for a web page and get back a URL you can open:
 
@@ -46,44 +54,46 @@ is recorded under your name, and it cleans itself up after a day.
 
 Here's what you can do, right in Slack:
 
-- **Ask the bot for things in plain English.** For example: "@Teleport Beams Bot make
-  a webpage about things to do in Ballard and share it." Teleport Beams Bot does the work in
-  one of your beams and replies with a link. Mention it in a channel, and it
-  answers in a thread under your message:
+- **Report a problem.** "@Teleport Beams Bot live website is down" starts the
+  [incident response](#incident-response): the service owner hears about it,
+  a ticket is opened, and the bot finds and diagnoses the server behind the
+  site through Teleport, then offers the fix. Reply "yes" and it fixes and
+  verifies it.
+- **Get work done.** "@Teleport Beams Bot make a webpage about things to do in
+  Ballard and share it." The bot works in one of your beams, shows you its
+  plan, and once you say yes, does the work and replies with a link. Mention
+  it in a channel, and it answers in a thread under your message:
 
   <img src="assets/screenshots/bot-ask-in-channel.png" alt="A user mentions @Teleport Beams Bot in a channel asking for a webpage about fun things to do in Seattle" width="560">
 
   <img src="assets/screenshots/bot-ask-thread.png" alt="Teleport Beams Bot replies in the thread that it is working in the user's beam" width="480">
 
-- **Just ask questions.** Something like "what should I eat for lunch?" gets a
-  quick answer from Claude (or Codex) without starting a beam, and follow-ups
-  in the thread keep the conversation going. Requests that need a computer,
-  like writing code or building a page, go to a beam automatically. Every
-  request is recorded in Teleport's audit log under your name.
-- **Attach files.** Add an image to your message ("tell me about this image")
-  and the bot looks at it. Other files, or work like "make a webpage with this
-  photo", are copied into your beam for the coding agent to use.
-
-  <img src="assets/screenshots/bot-chat-answer.png" alt="Asked what to have for lunch, Teleport Beams Bot says 'Just a moment while I look into this.' and then answers with lunch ideas, without starting a beam" width="560">
-
+- **Loop people in.** "tell Anna the website is down" messages Anna for you,
+  right away.
+- **Hand it files.** Attach logs, configs, or screenshots to your message;
+  files are copied into your beam for the agent to use, and images can be
+  looked at directly.
 - **Keep going in the same thread** to make changes, like "make the title
   bigger."
 - **Share what you made.** Ask the bot to publish it and you get a link you can
   open after signing in to Teleport.
-- **See your beams** by asking "how many beams do I have?"
-- **Start fresh** by asking for a new beam, and **clean up** by asking Teleport Beams Bot
-  to "delete curious-shield", "delete this beam" in its thread, or "delete
-  all my beams".
-- **Pick your assistant.** Teleport Beams Bot uses Claude Code unless you say "use codex"
-  (or "use claude" to switch back):
+- **Manage your beams**: "how many beams do I have?", "create a new beam",
+  "delete curious-shield", "delete this beam" in its thread, or "delete all
+  my beams".
+- **Pick your agent.** Teleport Beams Bot uses Claude Code unless you say "use
+  codex" (or "use claude" to switch back):
 
   <img src="assets/screenshots/bot-codex.png" alt="A request ending in 'use codex' gets 'Using Codex for this thread.' and Codex's answer" width="480">
+
+- **Ask how to do something.** Quick questions, like the `curl` command to
+  check a site, are answered in seconds without starting a beam. These go
+  through Teleport too, so they're in the audit log under your name.
 
 Comfortable with commands? `/beams help` lists everything, including running
 Claude Code or Codex yourself (see [Slash commands](#slash-commands)).
 
-Teleport Beams Bot gives this same overview if you ask it "what can I do with beams?"
-or "what is a beam?":
+Ask Teleport Beams Bot "what can I do with beams?" or "what is a beam?" for a
+short version in Slack:
 
 <img src="assets/screenshots/bot-what-is-a-beam.png" alt="Teleport Beams Bot answers 'what is a beam' with a plain-language overview of Teleport Beams and what you can do in Slack" width="560">
 
@@ -170,8 +180,8 @@ The direct message with the instructions, and the reply with the session ID
 <img src="assets/screenshots/bot-authorize-dm.png" alt="Teleport Beams Bot's direct message with the tsh delegation command, and the user's reply with the session ID (hidden)" width="720">
 
 Questions about which beams you have ("how many beams do I have", "list my
-beams") are answered straight from `tsh beams ls` in a second or two. Other
-questions get a chat answer in a few seconds (see [Chat answers](#chat-answers)),
+beams") are answered straight from `tsh beams ls` in a second or two. Quick
+questions get an answer in a few seconds (see [Quick answers](#quick-answers)),
 and work in a beam with Claude Code or Codex usually takes a minute or more.
 Teleport Beams Bot acknowledges right away: "Just a moment while I look into
 this." for a new question, followed by a note if the request turns into work in
@@ -183,32 +193,30 @@ newest message as soon as the current one finishes.
 
 <img src="assets/screenshots/bot-list-beams.png" alt="Teleport Beams Bot answers 'how many beams do I have' with a list of beams, regions, and expiry times" width="560">
 
-### Chat answers
+### Incident response
 
-Questions that don't need a computer ("what should I eat for lunch?", "explain
-DNS like I'm five") are answered by the model directly, with no beam. Teleport
-Beams Bot asks Teleport for a short-lived certificate for the tenant's `anthropic`
-app (or `openai` with "use codex") as you, through your delegation, and sends
-the request through Teleport's app proxy, which adds the provider's API key.
-Every chat request is an app session in Teleport's audit log, attributed to you
-and the bot.
+When `incident_response` is on, "@Teleport Beams Bot live website is down"
+runs the whole response in the thread:
 
-The model is told to hand off anything that needs a computer: running or
-testing code for you, creating files or pages, installing software,
-publishing, or managing beams. A command or short script you can run yourself,
-such as a `curl` check that a site is up, comes back as a chat answer instead.
-Handed-off requests continue in a beam as described
-below, with the chat so far passed to the coding agent as context. Once a
-thread is working in a beam, follow-ups go to the agent in that beam, and
-naming one of your beams always goes straight to it. If the tenant has no
-model apps, every request goes to a beam as before; if a model call fails, the
-bot reports the error instead of starting work in a beam.
+1. **Notifies the service owner.** The bot sends `service_owner` (or whoever
+   you name, as in "live website is down, tell Paul Hall") a direct message,
+   "There's an issue with the live website.", and replies "I contacted the
+   service owner on your behalf."
+2. **Opens a ticket.** It replies with a Zendesk ticket number. This step
+   isn't connected to Zendesk yet, so no ticket is actually created.
+3. **Diagnoses the problem from one of your beams** (the thread's, your newest,
+   or a new one). `tsh` in a beam is signed in as you, so every step is
+   audited as you. The bot lists apps with `tsh apps ls`, takes the one with a
+   `hosted-on` label, connects to that server with `tsh ssh` as
+   `incident_ssh_login`, and checks `systemctl is-active nginx`. If nginx is
+   down, it says so and offers to start it.
+4. **Fixes it when you say yes.** Reply "yes" in the thread and it runs
+   `systemctl start nginx` (with `sudo -n` for a login other than root),
+   checks the app's URL with `curl` from the server, tells the service owner
+   "The issue was resolved." and why the site was down, and updates the
+   ticket.
 
-The chat models are set with `chat_claude_model` (default `claude-sonnet-4-5`)
-and `chat_codex_model` (default `gpt-5`); the tenant maps these names to the
-models it serves. Claude chats use the Anthropic Messages API and Codex chats
-the OpenAI Responses API, the routes Teleport's model apps serve for every
-model. `disable_chat = true` turns chat answers off.
+Reply "no" to leave the server as it is.
 
 ### Telling people
 
@@ -236,9 +244,10 @@ Files attached to a message (or posted on their own in a bot thread) come
 with the request. The bot downloads them with the `files:read` scope, only
 from Slack's file hosts, up to 5 files of 20 MB each.
 
-- **Images in chat:** up to two JPEG, PNG, GIF, or WebP images of 3.5 MB each
-  are sent to the model with the question, so it can describe or discuss
-  them. The chat history keeps only a note of the image.
+- **Images with a quick question:** up to two JPEG, PNG, GIF, or WebP images
+  of 3.5 MB each, such as a screenshot of an error, are sent to the model with
+  the question so it can read them. The thread history keeps only a note of
+  the image.
 - **Anything else** (other file types, larger or more images, or requests that
   need a computer) runs in a beam. The files are copied into
   `/tmp/slack-attachments/` there with `tsh beams scp` as you, and the coding
@@ -282,6 +291,34 @@ only when the beam names come right after the word "delete" or "remove", so a
 request like "remove the header from the page in mint-arc" is still sent to
 the agent. You can also use `/beams rm <name>`.
 
+### Quick answers
+
+Questions that don't need a computer ("what's the curl command to check a
+site?", "what does this nginx error mean?") are answered by the model
+directly, with no beam. Teleport
+Beams Bot asks Teleport for a short-lived certificate for the tenant's `anthropic`
+app (or `openai` with "use codex") as you, through your delegation, and sends
+the request through Teleport's app proxy, which adds the provider's API key.
+Every quick answer is an app session in Teleport's audit log, attributed to you
+and the bot.
+
+The model is told to hand off anything that needs a computer: running or
+testing code for you, creating files or pages, installing software,
+publishing, or managing beams. A command or short script you can run yourself,
+such as a `curl` check that a site is up, comes back as a quick answer instead.
+Handed-off requests continue in a beam as described
+below, with the thread so far passed to the coding agent as context. Once a
+thread is working in a beam, follow-ups go to the agent in that beam, and
+naming one of your beams always goes straight to it. If the tenant has no
+model apps, every request goes to a beam as before; if a model call fails, the
+bot reports the error instead of starting work in a beam.
+
+The chat models are set with `chat_claude_model` (default `claude-sonnet-4-5`)
+and `chat_codex_model` (default `gpt-5`); the tenant maps these names to the
+models it serves. Claude answers use the Anthropic Messages API and Codex answers
+the OpenAI Responses API, the routes Teleport's model apps serve for every
+model. `disable_chat = true` turns quick answers off.
+
 Teleport Beams Bot is an engineer at heart, not a transporter operator, so
 don't ask it for a lift.
 
@@ -293,7 +330,7 @@ asked:
 - **Work in a beam** (the bot's agent runs and `/beams claude|codex|exec`) is
   an SSH command run as you, and Teleport's audit log has the full command
   line, prompt included.
-- **Chat answers** appear as an app session for you via the bot, plus an
+- **Quick answers** appear as an app session for you via the bot, plus an
   `app.session.llm_request` event per request with the model and token
   counts. Teleport doesn't record the prompt there, and plugins can't write
   their own audit events. So after answering, the bot also runs a harmless
@@ -306,12 +343,12 @@ message `Beams bot request`:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `chat`, `beam`, `tell`, `delete`, `list`, or `slash` |
+| `kind` | `chat` (quick answers), `beam`, `incident`, `tell`, `delete`, `list`, or `slash` |
 | `slack_team_id`, `slack_user_id` | Who asked, in Slack |
 | `teleport_user` | The Teleport user it ran as |
 | `request` | What they asked (up to 2,000 characters) |
-| `agent`, `model`, `app` | For chat: Claude or Codex, the model, and the Teleport app |
-| `app_session_id` | For chat: the Teleport app session, matching its `app.session.llm_request` events |
+| `agent`, `model`, `app` | For quick answers: Claude or Codex, the model, and the Teleport app |
+| `app_session_id` | For quick answers: the Teleport app session, matching its `app.session.llm_request` events |
 | `beam`, `continued`, `attachments` | For beam work: the beam, whether the agent conversation continued, and attached file names |
 | `command`, `beams` | The slash command, or the beams deleted |
 | `to_slack_user_id` | For `tell`: who was messaged (`request` is the message) |
@@ -519,38 +556,14 @@ Start from `config.toml.example`. The Beams settings:
 | `claude_args` | `["--dangerously-skip-permissions"]` | Extra Claude Code flags for `/beams claude`, which can't ask for approval. Bot requests set permission flags themselves and drop these. |
 | `claude_skip_approval` | `false` | Let Claude Code act on bot requests without a plan approved in Slack first |
 | `codex_timeout` | `15m` | Limit for `/beams codex` and the bot's Codex runs |
-| `chat_claude_model` | `claude-sonnet-4-5` | Model for chat answers through the `anthropic` app |
-| `chat_codex_model` | `gpt-5` | Model for chat answers through the `openai` app ("use codex") |
+| `chat_claude_model` | `claude-sonnet-4-5` | Model for quick answers through the `anthropic` app |
+| `chat_codex_model` | `gpt-5` | Model for quick answers through the `openai` app ("use codex") |
 | `omit_request_text` | `false` | Leave what users asked out of the [request log](#request-log) |
-| `disable_chat` | `false` | Send every request to a coding agent in a beam instead of answering chat questions directly |
-| `demo_skits` | `false` | Scripted demo replies, below. Leave off outside demos |
-| `demo_ssh_login` | `root` | Login the website demo uses on the app's server |
-| `demo_service_owner` | none | Slack name of the person the demo notifies about the website |
+| `disable_chat` | `false` | Send every request to a coding agent in a beam instead of answering quick questions directly |
+| `incident_response` | `false` | Turn on [incident response](#incident-response) for "live website is down" |
+| `incident_ssh_login` | `root` | Login incident response uses on the website's server |
+| `service_owner` | none | Slack name of the person incident response notifies |
 | `codex_args` | `["--dangerously-bypass-approvals-and-sandbox"]` | Extra Codex flags, for the same reason. `--skip-git-repo-check` is always added because a beam's home directory is not a Git repository. |
-
-#### Demo skits
-
-With `demo_skits = true`, these requests follow a script:
-
-- **"live website is down"** runs the whole incident response:
-  1. Sends `demo_service_owner` (or whoever the message names, as in "tell
-     Paul Hall") a direct message, "There's an issue with the live website.",
-     and says "I contacted the service owner on your behalf."
-  2. Says it created Zendesk ticket #NNNNN, a random number. Nothing is sent
-     to Zendesk.
-  3. Checks the website for real, from one of your beams (the thread's, your
-     newest, or a new one). Inside a beam `tsh` is already logged in as you,
-     so every step is audited as you. The bot runs `tsh apps ls` there, takes
-     the app with a `hosted-on` label, and checks `systemctl is-active nginx`
-     on that server with `tsh ssh` as `demo_ssh_login`. If nginx is down, it
-     offers to start it.
-  4. Reply "yes" in the thread and it runs `systemctl start nginx` (with
-     `sudo -n` for a login other than root), checks the app's URL with `curl`
-     from the server, sends the owner a second message ("The issue was
-     resolved." and why it was down), and says it updated the ticket.
-- **"create and update a Zendesk ticket"** on its own replies with a made-up
-  ticket number, and **"notify the service owner"** on its own sends the
-  first message.
 
 `required_role` or `users` must be set. Socket Mode reuses `review.app_token`
 for the `xapp-` token even when access-request review is disabled.
