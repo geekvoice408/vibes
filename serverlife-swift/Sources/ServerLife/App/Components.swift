@@ -19,14 +19,15 @@ struct GhostButtonStyle: ButtonStyle {
         var body: some View {
             let p = Theme.shared.p
             let fg: Color = prominent ? .white : destructive ? p.red : p.text
-            let bg: Color = prominent ? (destructive ? p.red : p.accent)
-                : (hover.on ? p.panel3 : p.panel2)
+            let bg: Color = prominent ? (destructive ? p.red : p.accent) : Theme.shared.buttonFace
             configuration.label
                 .font(.system(size: small ? 11 : 12))
                 .padding(.horizontal, small ? 7 : 10)
                 .padding(.vertical, small ? 2 : 4)
                 .foregroundStyle(fg)
                 .background(RoundedRectangle(cornerRadius: 5).fill(bg.opacity(configuration.isPressed ? 0.8 : 1)))
+                // Hover brightens the button's own face rather than swapping colour.
+                .overlay(RoundedRectangle(cornerRadius: 5).fill(Color.white.opacity(hover.on && !prominent ? 0.06 : 0)))
                 .overlay(RoundedRectangle(cornerRadius: 5).stroke(prominent ? Color.clear : p.border))
                 .opacity(enabled ? 1 : 0.45)
                 .onHover { hover.on = $0 }

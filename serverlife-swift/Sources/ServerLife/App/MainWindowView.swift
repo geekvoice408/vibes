@@ -82,7 +82,10 @@ private struct TitleBar: View {
     var body: some View {
         let p = Theme.shared.p
         HStack(spacing: 0) {
-            Color.clear.frame(width: window.nsWindow?.styleMask.contains(.fullScreen) == true ? 8 : 78)
+            // Tabs start where the panes do: over the sidebar is the sidebar's
+            // (with room for the window buttons), not the first tab's.
+            let buttons: CGFloat = window.nsWindow?.styleMask.contains(.fullScreen) == true ? 8 : 78
+            Color.clear.frame(width: window.sidebarVisible ? max(buttons, window.sidebarWidth + 5) : buttons)
             Slots.tabStrip(window)
             Slots.titlebarActions(window)
                 .padding(.trailing, 8)

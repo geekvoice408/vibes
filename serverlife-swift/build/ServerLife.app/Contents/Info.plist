@@ -4,7 +4,7 @@
   <key>CFBundleName</key><string>ServerLife</string>
   <key>CFBundleDisplayName</key><string>ServerLife</string>
   <key>CFBundleIdentifier</key><string>dev.serverlife.swift</string>
-  <key>CFBundleVersion</key><string>3</string>
+  <key>CFBundleVersion</key><string>7</string>
   <key>CFBundleShortVersionString</key><string>0.15.2</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleExecutable</key><string>ServerLife</string>

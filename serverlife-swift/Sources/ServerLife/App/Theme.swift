@@ -73,6 +73,23 @@ final class Theme {
 
     /// The system's own appearance — not NSApp's, which `refresh` forces to
     /// the chosen theme and would then only ever report itself.
+    /// The fill of an ordinary (non-prominent) button: the native push-button
+    /// face in the macOS theme, `panel2` everywhere else (as styles.css).
+    var buttonFace: Color {
+        guard Store.shared.settingJSON("theme").string == "system" else { return p.panel2 }
+        let dark = p.tone == .dark
+        var out = p.panel2
+        NSAppearance(named: dark ? .darkAqua : .aqua)!.performAsCurrentDrawingAppearance {
+            let face = NSColor.controlColor.usingColorSpace(.sRGB) ?? .gray
+            let base = NSColor.windowBackgroundColor.usingColorSpace(.sRGB) ?? .black
+            let a = face.alphaComponent
+            out = Color(.sRGB, red: face.redComponent * a + base.redComponent * (1 - a),
+                        green: face.greenComponent * a + base.greenComponent * (1 - a),
+                        blue: face.blueComponent * a + base.blueComponent * (1 - a))
+        }
+        return out
+    }
+
     var systemIsDark: Bool {
         UserDefaults.standard.string(forKey: "AppleInterfaceStyle")?.lowercased() == "dark"
     }

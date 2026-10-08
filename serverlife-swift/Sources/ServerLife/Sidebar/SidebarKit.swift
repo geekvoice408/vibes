@@ -134,24 +134,27 @@ struct SBChip: View {
     var count: Int? = nil
     var on = false
     var italic = false
-    var size: CGFloat = 9.5
+    var size: CGFloat = 10.5
     var help: String = ""
     var action: () -> Void
     @StateObject private var hover = LocalFlag()
     var body: some View {
         let p = Theme.shared.p
+        // Key in the secondary label colour, value in the primary one, each
+        // at full strength: dimming an already-dim colour made them unreadable.
+        let keyColour: Color = on ? Color.white.opacity(0.85) : p.textDim
+        let valueColour: Color = on ? Color.white : p.text
         Button(action: action) {
             HStack(spacing: 3) {
                 if let key {
-                    Text(key).opacity(on ? 0.8 : 0.6).lineLimit(1)
-                    Text("=").opacity(0.3)
+                    Text(key).foregroundStyle(keyColour).lineLimit(1)
+                    Text("=").foregroundStyle(p.muted)
                 }
-                Text(value).lineLimit(1).italic(italic)
-                if let count { Text(String(count)).opacity(on ? 0.8 : 0.55) }
+                Text(value).foregroundStyle(valueColour).lineLimit(1).italic(italic)
+                if let count { Text(String(count)).foregroundStyle(keyColour) }
             }
-            .font(SBZoom.font(size, mono: true))
-            .padding(.horizontal, SBZoom.px(5)).padding(.vertical, SBZoom.px(1))
-            .foregroundStyle(on ? Color.white : (hover.on ? p.text : p.textDim))
+            .font(SBZoom.font(max(size, 10.5), mono: true))
+            .padding(.horizontal, SBZoom.px(6)).padding(.vertical, SBZoom.px(1.5))
             .background(RoundedRectangle(cornerRadius: 3).fill(on ? p.accentDim : p.panel3))
             .overlay(RoundedRectangle(cornerRadius: 3).stroke(on ? p.accent : (hover.on ? p.accentDim : .clear)))
         }

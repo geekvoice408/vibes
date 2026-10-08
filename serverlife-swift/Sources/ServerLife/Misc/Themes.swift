@@ -238,15 +238,22 @@ enum MiscThemes {
             // panel-2/panel-3 are what buttons are filled with (resting /
             // hover): use the native push-button face, not the near-black
             // control *background* colour, so buttons look like macOS's own.
-            let face = srgb(NSColor.controlColor)
-            out["--panel-2"] = hex(face, over: panel)
-            out["--panel-3"] = hex(face.withAlphaComponent(min(1, face.alphaComponent + (dark ? 0.12 : 0.0))),
-                                   over: dark ? panel : srgb(NSColor.unemphasizedSelectedContentBackgroundColor))
+            // panel-2 is a surface (boxes, chips, inputs) as well as the
+            // button fill, so it stays subtle; buttons get the native face
+            // through Theme.buttonFace instead.
+            out["--panel-2"] = dark ? hex(NSColor.labelColor.withAlphaComponent(0.07), over: panel)
+                                    : hex(NSColor.controlBackgroundColor, over: panel)
+            // panel-3 is the wash behind tag chips, selected rows and badges:
+            // subtle, so the text on it stays readable.
+            out["--panel-3"] = dark ? hex(NSColor.labelColor.withAlphaComponent(0.13), over: panel)
+                                    : hex(NSColor.unemphasizedSelectedContentBackgroundColor, over: panel)
             out["--border"] = hex(NSColor.separatorColor, over: panel)
             out["--border-soft"] = hex(NSColor.separatorColor.withAlphaComponent(0.5), over: panel)
             out["--text"] = hex(NSColor.labelColor, over: bg)
-            out["--text-dim"] = hex(NSColor.secondaryLabelColor, over: bg)
-            out["--muted"] = hex(NSColor.tertiaryLabelColor, over: bg)
+            // The app uses these for help text and labels, not decoration:
+            // macOS's tertiary label (~25%) is far too faint for that.
+            out["--text-dim"] = hex(NSColor.labelColor.withAlphaComponent(0.78), over: bg)
+            out["--muted"] = hex(NSColor.labelColor.withAlphaComponent(0.55), over: bg)
             out["--accent"] = hex(NSColor.controlAccentColor)
             out["--accent-dim"] = hex(NSColor.controlAccentColor.withAlphaComponent(0.55), over: bg)
             out["--green"] = hex(NSColor.systemGreen)

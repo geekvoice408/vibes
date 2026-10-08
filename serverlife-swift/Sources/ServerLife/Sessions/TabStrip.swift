@@ -12,7 +12,7 @@ struct SessionsTabStrip: View {
         let p = Theme.shared.p
         GeometryReader { g in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 0) {
+                HStack(spacing: 2) {
                     ForEach(s.tabs) { t in TabItemView(s: s, tab: t) }
                     AddTabButton(window: window)
                     // Past the end of the tabs: a tab of its own for a dragged pane.
@@ -37,11 +37,12 @@ private struct AddTabButton: View {
     var body: some View {
         let p = Theme.shared.p
         Button { Actions.shared.perform("new-session", window: window) } label: {
-            Text("+").font(.system(size: 17))
-                .frame(width: 34, height: 38)
-                .foregroundStyle(hover.on ? p.text : p.muted)
-                .background(hover.on ? p.panel2 : .clear)
+            Image(systemName: "plus").font(.system(size: 12, weight: .medium))
+                .frame(width: 26, height: 26)
+                .foregroundStyle(hover.on ? p.text : p.textDim)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(hover.on ? p.text.opacity(0.07) : .clear))
                 .contentShape(Rectangle())
+                .padding(.leading, 2)
         }
         .buttonStyle(.plain)
         .onHover { hover.on = $0 }
@@ -60,6 +61,7 @@ struct TabItemView: View {
     let s: SessionsWindow
     let tab: SessionTab
     @StateObject private var hover = LocalFlag()
+    @StateObject private var closeHover = LocalFlag()
     @StateObject private var dropInto = LocalFlag()
 
     var body: some View {
@@ -81,33 +83,54 @@ struct TabItemView: View {
 
         TimelineView(.periodic(from: .now, by: 0.25)) { _ in
             let act: PaneActivity.State = (PaneActivity.showTabActivity && !active) ? PaneActivity.shared.tabActivity(paneIds) : .idle
-            HStack(spacing: 7) {
-                Circle().fill(dotColor(p)).frame(width: 7, height: 7)
-                    .opacity(dotPulse ? 0.6 : 1)
-                Text(title + suffix)
-                    .font(.system(size: 12))
-                    .italic(tab.tmuxEnded != nil)
-                    .lineLimit(1).truncationMode(.tail)
-                    .foregroundStyle(act == .waiting ? p.amber : (tint ?? (active || hover.on ? p.text : p.textDim)))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                ActivityMark(state: act)
-                    .help(act == .waiting ? "Waiting for an answer in this tab" : act == .moving ? "Output is arriving in this tab" : "")
+            // macOS-style tab: a rounded, inset pill. Close on the left (on
+            // hover, or always on the selected tab), title centred, the
+            // connection dot and activity mark either side of it.
+            HStack(spacing: 6) {
                 Button { Task { await s.requestCloseTab(tab.id) } } label: {
-                    Text("×").font(.system(size: 14)).frame(width: 16, height: 16)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(closeHover.on ? p.text.opacity(0.14) : .clear))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(p.muted)
+                .foregroundStyle(p.textDim)
+                .onHover { closeHover.on = $0 }
                 .opacity(hover.on || active ? 1 : 0)
+                .help("Close tab (⌘W)")
+                Spacer(minLength: 0)
+                Circle().fill(dotColor(p)).frame(width: 6, height: 6)
+                    .opacity(dotPulse ? 0.6 : 1)
+                Text(title + suffix)
+                    .font(.system(size: 12, weight: active ? .medium : .regular))
+                    .italic(tab.tmuxEnded != nil)
+                    .lineLimit(1).truncationMode(.middle)
+                    .foregroundStyle(act == .waiting ? p.amber : (tint ?? (active || hover.on ? p.text : p.textDim)))
+                ActivityMark(state: act)
+                    .help(act == .waiting ? "Waiting for an answer in this tab" : act == .moving ? "Output is arriving in this tab" : "")
+                Spacer(minLength: 0)
+                Color.clear.frame(width: 16, height: 16)   // balances the close button
             }
-            .padding(.leading, 12).padding(.trailing, 10)
-            .frame(minWidth: 110, maxWidth: 230, maxHeight: .infinity)
-            .background(background(p, active: active, act: act))
-            .overlay(alignment: .bottom) {
-                if dropInto.on { p.accent.frame(height: 2) }
-                else if active { p.accent.frame(height: 2) }
-                else if let tint { tint.frame(height: 2) }
+            .padding(.horizontal, 6)
+            .frame(minWidth: 120, maxWidth: 220)
+            .frame(height: 26)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(background(p, active: active, act: act))
+                    .shadow(color: .black.opacity(active ? 0.22 : 0), radius: 1, y: 0.5)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(dropInto.on ? p.accent : (active ? p.border.opacity(0.6) : .clear), lineWidth: dropInto.on ? 1.5 : 0.5)
+            )
+            .overlay(alignment: .leading) {
+                // A host's colour: a slim tinted edge, like a tab-group colour.
+                if let tint {
+                    RoundedRectangle(cornerRadius: 1.5).fill(tint).frame(width: 3, height: 14).padding(.leading, 3)
+                }
             }
-            .overlay(alignment: .trailing) { p.borderSoft.frame(width: 1) }
+            .padding(.horizontal, 2)
+            .frame(maxHeight: .infinity)
             .opacity(tab.tmuxEnded != nil ? 0.6 : 1)
         }
         .contentShape(Rectangle())
@@ -144,8 +167,10 @@ struct TabItemView: View {
     private func background(_ p: Palette, active: Bool, act: PaneActivity.State) -> Color {
         if dropInto.on { return p.accent.opacity(0.14) }
         if act == .waiting { return p.amber.opacity(hover.on ? 0.20 : 0.13) }
-        if active { return p.bg }
-        return hover.on ? p.panel2 : .clear
+        // The selected tab is raised (the native button face); others are
+        // flat until hovered.
+        if active { return p.panel2 }
+        return hover.on ? p.text.opacity(0.07) : .clear
     }
 
     @ViewBuilder

@@ -15,8 +15,8 @@ struct PaneHeaderView: View {
         let title = SessionsCore.paneTitle(pane)
         HStack(spacing: 6) {
             Text(title)
-                .font(.system(size: 10.5))
-                .foregroundStyle(colour ?? (focused ? p.textDim : p.muted))
+                .font(.system(size: 11, weight: focused ? .medium : .regular))
+                .foregroundStyle(colour ?? (focused ? p.text : p.textDim))
                 .lineLimit(1).truncationMode(.tail)
                 .help(SessionsCore.paneTitle(pane, long: true))
                 .allowsHitTesting(false)
@@ -29,11 +29,11 @@ struct PaneHeaderView: View {
                 highlightButton(p)
             }
             if pane.kind == .remote && Store.shared.settingJSON("showPaneNetIcon").bool != false {
-                Button("\u{2317}") {
+                Button {
                     s.setActivePane(pane.id)
                     Actions.shared.perform("nettools", window: s.window, paneId: pane.id, connId: pane.connId,
                                            args: ["connId": pane.connId ?? "", "tool": "ports"])
-                }
+                } label: { Image(systemName: "network") }
                 .buttonStyle(HeaderButtonStyle())
                 .help("Network tools from this host — reachability, HTTP and its own addresses")
             }
@@ -49,37 +49,39 @@ struct PaneHeaderView: View {
                 HStack(spacing: 1) { ForEach(Array(pins.enumerated()), id: \.offset) { $0.element } }
             }
             if !pane.filesOnly && pane.kind != .view {
-                Button("\u{25B6}") {
+                Button {
                     s.setActivePane(pane.id)
                     Actions.shared.perform("run-macro", window: s.window, paneId: pane.id, connId: pane.connId)
-                }
-                .buttonStyle(HeaderButtonStyle(color: p.green, size: 9, pulsing: pane.macroRepeating))
+                } label: { Image(systemName: "play.fill") }
+                .buttonStyle(HeaderButtonStyle(color: p.green, size: 10, pulsing: pane.macroRepeating))
                 .help(pane.macroButtonTitle ?? (pane.kind == .local ? "Run a macro in this shell (⌘⇧R)" : "Run a macro on this host (⌘⇧R)"))
             }
             if PaneAccessories.shared.hasProvider && pane.kind != .view {
-                Button("\u{2630}") { s.setExplorerVisible(pane, !pane.explorerVisible) }
+                Button { s.setExplorerVisible(pane, !pane.explorerVisible) } label: { Image(systemName: "sidebar.left") }
                     .buttonStyle(HeaderButtonStyle(active: pane.explorerVisible))
                     .help("Show/hide this file explorer (⌘E)\nRight-click for every pane in this tab")
                     .contextMenu { explorerScopeMenu() }
             }
-            Button("×") { s.closePane(pane.id) }
-                .buttonStyle(HeaderButtonStyle(size: 13))
+            Button { s.closePane(pane.id) } label: { Image(systemName: "xmark") }
+                .buttonStyle(HeaderButtonStyle(size: 10))
                 .help("Close pane")
         }
-        .padding(.horizontal, 7)
-        .frame(height: 22)
+        .padding(.horizontal, 8)
+        .frame(height: 26)
         .background(PaneDragSource(s: s, paneId: pane.id))
-        .background(focused ? p.panel2 : p.panel)
+        // The window's own surface with a hairline under it, as a macOS
+        // toolbar strip; focus shows in the title, not as a grey slab.
+        .background(p.panel)
         .overlay(alignment: .leading) { if let colour { colour.frame(width: 2) } }
-        .overlay(alignment: .bottom) { p.borderSoft.frame(height: 1) }
+        .overlay(alignment: .bottom) { p.border.frame(height: 0.5) }
     }
 
     @ViewBuilder
     private func highlightButton(_ p: Palette) -> some View {
         let n = pane.highlightCount
         let key = SessionsCore.hostKey(of: pane)
-        Button("\u{25A4}") { s.toggleHighlight(pane) }
-            .buttonStyle(HeaderButtonStyle(color: n > 0 ? p.amber : nil, dim: n == 0))
+        Button { s.toggleHighlight(pane) } label: { Image(systemName: "highlighter") }
+            .buttonStyle(HeaderButtonStyle(color: n > 0 ? p.amber : nil, active: n > 0, dim: n == 0))
             .help(n > 0 ? "Highlighting \(n) keyword pattern\(n == 1 ? "" : "s") — click to turn off, right-click to edit"
                         : "Highlight keywords in this session — right-click to edit")
             .contextMenu {
@@ -115,7 +117,7 @@ struct PaneHeaderView: View {
 /// `.icon-btn.sm` in a pane header.
 struct HeaderButtonStyle: ButtonStyle {
     var color: Color? = nil
-    var size: CGFloat = 12
+    var size: CGFloat = 11.5
     var active = false
     var dim = false
     var pulsing = false
@@ -131,10 +133,12 @@ struct HeaderButtonStyle: ButtonStyle {
         var body: some View {
             let p = Theme.shared.p
             configuration.label
-                .font(.system(size: size))
-                .foregroundStyle(active ? Color.white : (color ?? (hover.on ? p.text : p.textDim)))
-                .frame(width: 22, height: 20)
-                .background(RoundedRectangle(cornerRadius: 5).fill(active ? p.accentDim : (hover.on ? p.panel3 : .clear)))
+                .font(.system(size: size, weight: .medium))
+                .foregroundStyle(color ?? (active ? p.accent : (hover.on ? p.text : p.textDim)))
+                .frame(width: 24, height: 20)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(configuration.isPressed ? p.text.opacity(0.16)
+                          : (active ? p.text.opacity(0.10) : (hover.on ? p.text.opacity(0.08) : .clear))))
                 .opacity(dim && !hover.on ? 0.5 : 1)
                 .overlay(alignment: .topTrailing) {
                     if pulsing { Circle().fill(p.green).frame(width: 5, height: 5).offset(x: -2, y: 2) }
@@ -155,18 +159,27 @@ struct PaneSearchBox: View {
         let p = Theme.shared.p
         let active = pane.searchActive || focused || !pane.searchText.isEmpty
         HStack(spacing: 2) {
-            Text("\u{2315}").font(.system(size: 11)).foregroundStyle(p.muted).padding(.trailing, 1)
-            TextField("Search…", text: Binding(get: { pane.searchText }, set: { v in
-                pane.searchText = v
-                if v.isEmpty { pane.term?.clearSearchState() } else { pane.term?.findIncremental(v) }
-            }))
-            .textFieldStyle(.plain)
-            .font(.system(size: 11))
-            .padding(.horizontal, 6).padding(.vertical, 1)
-            .frame(width: active ? 190 : 110)
-            .background(RoundedRectangle(cornerRadius: 3).fill(p.bg))
-            .overlay(RoundedRectangle(cornerRadius: 3).stroke(focused ? p.accent : p.border))
-            .focused($focused)
+            // A macOS search field: magnifier and clear button inside a
+            // rounded, recessed box with the focus ring in the accent.
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass").font(.system(size: 10.5)).foregroundStyle(p.textDim)
+                TextField("Search", text: Binding(get: { pane.searchText }, set: { v in
+                    pane.searchText = v
+                    if v.isEmpty { pane.term?.clearSearchState() } else { pane.term?.findIncremental(v) }
+                }))
+                .textFieldStyle(.plain)
+                .font(.system(size: 11.5))
+                .focused($focused)
+                if !pane.searchText.isEmpty {
+                    Button { clear() } label: { Image(systemName: "xmark.circle.fill").font(.system(size: 11)) }
+                        .buttonStyle(.plain).foregroundStyle(p.textDim).help("Clear")
+                }
+            }
+            .padding(.horizontal, 7)
+            .frame(width: active ? 200 : 130, height: 20)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(p.text.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(focused ? p.accent.opacity(0.8) : p.border.opacity(0.7), lineWidth: focused ? 2 : 0.5))
             .onKeyPress(.return, phases: .down) { press in
                 step(press.modifiers.contains(.shift) ? -1 : 1)
                 return .handled
@@ -182,9 +195,10 @@ struct PaneSearchBox: View {
                 .foregroundStyle(pane.searchCount == 0 && !pane.searchText.isEmpty ? p.red : p.muted)
                 .frame(minWidth: 34, alignment: .trailing)
             if active {
-                Button("\u{2039}") { step(-1) }.buttonStyle(HeaderButtonStyle()).help("Previous match (⇧⏎)")
-                Button("\u{203A}") { step(1) }.buttonStyle(HeaderButtonStyle()).help("Next match (⏎)")
-                Button("×") { clear() }.buttonStyle(HeaderButtonStyle()).help("Clear")
+                Button { step(-1) } label: { Image(systemName: "chevron.left") }
+                    .buttonStyle(HeaderButtonStyle(size: 10)).help("Previous match (⇧⏎)")
+                Button { step(1) } label: { Image(systemName: "chevron.right") }
+                    .buttonStyle(HeaderButtonStyle(size: 10)).help("Next match (⏎)")
             }
         }
         .padding(.trailing, 6)
