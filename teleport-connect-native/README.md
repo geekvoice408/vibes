@@ -15,6 +15,12 @@ Teleport Connect's Electron app is a thin UI layer over `tshd`, a Go daemon that
     per-session MFA (a Touch ID/security key tap, or a TOTP code) via a small gRPC server this
     app runs itself — `TshdEventsService`, which tshd calls *into* mid-login when it needs
     something a plain request/response can't provide.
+  - Browser handoff for MFA: the "Verify it's you" screen opens the cluster's browser-MFA page so a
+    browser/iCloud passkey can answer (tshd itself can only use USB security keys or Touch ID
+    credentials registered with tsh). Preferences > "Login with tsh" stores a login name and
+    `--mfa-mode`, and the login form's "Log in with tsh" button runs `tsh login --mfa-mode=…` in a
+    terminal tab. Passwordless login still needs a security key or a tsh-registered Touch ID
+    credential ("..." menu > Register Touch ID Passkey).
   - Saved local-login credentials are pre-filled from the Keychain next time you log in to the
     same cluster.
 - Browses cluster resources (servers, databases, Kubernetes clusters, apps, Windows desktops) as a grid or list, with type filtering, search-as-you-sort, pinning, and a resource count in the status bar.

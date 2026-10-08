@@ -105,42 +105,13 @@ struct LoginSheetView: View {
                     }
                 }
 
-            case .syncing:
-                switch model.mfaPromptState {
-                case .none:
+            case .syncing, .verifying:
+                if let prompt = model.mfaPrompt {
+                    mfaView(prompt)
+                } else {
                     centered {
                         ProgressView()
                         Text("Syncing cluster…").font(Theme.uiFontSmall).foregroundStyle(Theme.textMuted)
-                    }
-
-                case .waitingForWebAuthnTap:
-                    centered {
-                        Image(systemName: "hand.tap").font(.title).foregroundStyle(Theme.brand)
-                        Text("Touch your security key").font(Theme.uiFontMedium)
-                        Text("Or complete the Touch ID prompt if you have one set up.")
-                            .font(Theme.uiFontSmall)
-                            .foregroundStyle(Theme.textMuted)
-                            .multilineTextAlignment(.center)
-                        Button("Cancel") { model.cancelLogin() }
-                    }
-
-                case .enteringTOTP:
-                    VStack(alignment: .leading, spacing: Theme.space[2]) {
-                        Text("Enter your authenticator code").font(Theme.uiFontMedium)
-                        TextField("6-digit code", text: Binding(
-                            get: { model.mfaTOTPCode },
-                            set: { model.mfaTOTPCode = $0 }
-                        ))
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { model.submitMFATOTP() }
-                        HStack {
-                            Spacer()
-                            Button("Cancel") { model.cancelLogin() }
-                            Button("Continue") { model.submitMFATOTP() }
-                                .buttonStyle(.borderedProminent)
-                                .tint(Theme.brand)
-                                .disabled(model.mfaTOTPCode.isEmpty)
-                        }
                     }
                 }
 
@@ -152,6 +123,12 @@ struct LoginSheetView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textMuted)
                         .multilineTextAlignment(.center)
+                    if message.contains("Register Touch ID") {
+                        Button("Register Touch ID Passkey…") {
+                            model.cancelLogin()
+                            model.registerTouchIDPasskey()
+                        }
+                    }
                     Button("Close") { model.cancelLogin() }
                 }
             }
@@ -159,6 +136,63 @@ struct LoginSheetView: View {
         .padding(isShowingBrowser ? 0 : Theme.space[4])
         .frame(width: isShowingBrowser ? nil : 420)
         .background(Theme.levelElevated)
+    }
+
+    /// Second-factor screen. tshd tries a security key/Touch ID on its own in parallel; this adds
+    /// the browser route (where an iCloud/browser passkey works) and TOTP entry.
+    private func mfaView(_ prompt: MFAPrompt) -> some View {
+        VStack(alignment: .leading, spacing: Theme.space[3]) {
+            Text("Verify it's you").font(.system(size: 17)).foregroundStyle(Theme.textMain)
+            if !prompt.reason.isEmpty {
+                Text(prompt.reason).font(Theme.uiFontSmall).foregroundStyle(Theme.textMuted)
+            }
+
+            if prompt.browserURL != nil || prompt.ssoURL != nil {
+                let label = prompt.browserURL != nil ? "Use your passkey in the browser" : "Continue with \(prompt.ssoName)"
+                if prompt.browserOpened {
+                    HStack(spacing: Theme.space[2]) {
+                        ProgressView().controlSize(.small)
+                        Text("Finish in your browser — this window continues automatically.")
+                            .font(Theme.uiFontSmall).foregroundStyle(Theme.textMuted)
+                    }
+                    Button("Open browser again") { model.openMFABrowser() }
+                        .buttonStyle(.plain).foregroundStyle(Theme.brand)
+                } else {
+                    Button(label) { model.openMFABrowser() }
+                        .buttonStyle(.borderedProminent).tint(Theme.brand)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+
+            if prompt.webauthn {
+                HStack(alignment: .top, spacing: Theme.space[2]) {
+                    Image(systemName: "hand.tap").foregroundStyle(Theme.textMuted)
+                    Text("Or touch a security key plugged into this Mac, or a Touch ID passkey registered with tsh.")
+                        .font(Theme.uiFontSmall).foregroundStyle(Theme.textMuted)
+                }
+            }
+
+            if prompt.totp {
+                TextField("Authenticator code", text: Binding(
+                    get: { model.mfaTOTPCode },
+                    set: { model.mfaTOTPCode = $0 }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { model.submitMFATOTP() }
+                Button("Continue with code") { model.submitMFATOTP() }
+                    .disabled(model.mfaTOTPCode.isEmpty)
+            }
+
+            if prompt.browserURL == nil && prompt.ssoURL == nil && !prompt.totp {
+                Text("This cluster didn't offer browser verification, so only a security key or a Touch ID passkey registered with tsh can be used.")
+                    .font(Theme.uiFontSmall).foregroundStyle(Theme.interactiveDanger)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { model.cancelLogin() }
+            }
+        }
     }
 
     private var isShowingBrowser: Bool {
@@ -311,6 +345,17 @@ struct LoginSheetView: View {
             .buttonStyle(.bordered)
             .frame(maxWidth: .infinity)
             .disabled(model.loginUsername.isEmpty || model.loginPassword.isEmpty)
+
+            Button {
+                model.loginViaTsh(clusterURI: clusterURI)
+            } label: {
+                Text("Log in with tsh (\(model.tshMFAMode == "browser" ? "passkey in browser" : "MFA: \(model.tshMFAMode)"))")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.brand)
+            .padding(.top, Theme.space[1])
+            .help("Runs `tsh login --mfa-mode=\(model.tshMFAMode)` in a terminal tab. Change the method in Preferences.")
         }
     }
 }

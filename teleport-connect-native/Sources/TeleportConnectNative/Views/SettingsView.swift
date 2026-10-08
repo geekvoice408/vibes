@@ -41,6 +41,42 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
+                        Toggle("Open the browser automatically for MFA (use your passkey there)", isOn: Binding(
+                            get: { model.preferBrowserMFA },
+                            set: { model.setPreferBrowserMFA($0) }
+                        ))
+                        .font(.system(size: 12))
+                    }
+
+                    Divider()
+
+                    section("Login with tsh") {
+                        Text("The \"Log in with tsh\" button runs `tsh login --user=… --mfa-mode=…` in a terminal tab, so MFA can use your browser passkey (iCloud Keychain, 1Password, phone) instead of a security key.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.textMuted)
+                        configRow("Login name") {
+                            TextField("e.g. paul@geekvoice.net", text: Binding(
+                                get: { model.tshLoginUser },
+                                set: { model.setTshLogin(user: $0) }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                        }
+                        configRow("Auth method (--mfa-mode)") {
+                            Picker("", selection: Binding(
+                                get: { model.tshMFAMode },
+                                set: { model.setTshLogin(mfaMode: $0) }
+                            )) {
+                                Text("Browser (passkey)").tag("browser")
+                                Text("Security key").tag("cross-platform")
+                                Text("Touch ID").tag("platform")
+                                Text("Authenticator code").tag("otp")
+                                Text("SSO").tag("sso")
+                                Text("Automatic").tag("auto")
+                            }
+                            .labelsHidden()
+                            .frame(width: 200)
+                        }
                     }
 
                     Divider()

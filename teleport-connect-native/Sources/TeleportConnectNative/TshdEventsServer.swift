@@ -65,35 +65,35 @@ final class TshdEventsServer {
             .init()
         }
 
-        /// tshd calls this during Login when the cluster wants MFA. Per service's doc comment,
-        /// our response *chooses* the method: an empty response (no totp_code) means "go ahead
-        /// with WebAuthn/SSO"; a filled totp_code means "use TOTP instead". WebAuthn's actual
-        /// Touch ID/security key ceremony happens in tshd's own process after we respond — we
-        /// just need to acknowledge and show a waiting state.
+        /// tshd calls this when MFA is needed (local login's second factor, per-session MFA). The
+        /// RPC must stay *pending* while the user completes MFA by whatever route is in progress
+        /// (security key/Touch ID handled by tshd itself, or the browser handoff) — tshd races all
+        /// of them and cancels this call when another one wins. Returning early would be read as
+        /// an (empty) TOTP answer and fail the login. We only return when the user types a TOTP
+        /// code, and throw `aborted` if they cancel (tshd then stops waiting on the other routes).
         func promptMFA(
             request: Teleport_Lib_Teleterm_V1_PromptMFARequest,
             context: GRPCCore.ServerContext
         ) async throws -> Teleport_Lib_Teleterm_V1_PromptMFAResponse {
-            if request.webauthn {
-                await MainActor.run { self.model?.beginMFAWebAuthnWait() }
-                return .init()
+            let waiter = MFAWaiter()
+            await MainActor.run { self.model?.beginMFAPrompt(request, waiter: waiter) }
+            let outcome = await withTaskCancellationHandler {
+                await waiter.wait()
+            } onCancel: {
+                waiter.finish(.cancelled)
             }
-            if request.totp {
-                let code = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
-                    Task { @MainActor in
-                        self.model?.beginMFATOTPPrompt { code in
-                            continuation.resume(returning: code)
-                        }
-                    }
-                }
+            await MainActor.run { self.model?.endMFAPrompt(waiter: waiter) }
+
+            switch outcome {
+            case .code(let code):
                 var response = Teleport_Lib_Teleterm_V1_PromptMFAResponse()
                 response.totpCode = code
                 return response
+            case .cancelled:
+                throw RPCError(code: .cancelled, message: "MFA prompt was cancelled")
+            case .aborted:
+                throw RPCError(code: .aborted, message: "MFA was cancelled")
             }
-            throw RPCError(
-                code: .failedPrecondition,
-                message: "This cluster requires an MFA method (SSO) that Teleport Connect Native doesn't support yet."
-            )
         }
 
         func promptHardwareKeyPIN(
@@ -109,7 +109,7 @@ final class TshdEventsServer {
             request: Teleport_Lib_Teleterm_V1_PromptHardwareKeyTouchRequest,
             context: GRPCCore.ServerContext
         ) async throws -> Teleport_Lib_Teleterm_V1_PromptHardwareKeyTouchResponse {
-            await MainActor.run { self.model?.beginMFAWebAuthnWait() }
+            await MainActor.run { self.model?.statusMessage = "Touch your hardware key…" }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(200))
             }
@@ -147,5 +147,37 @@ final class TshdEventsServer {
         ) async throws -> Teleport_Lib_Teleterm_V1_ReportUnexpectedVnetShutdownResponse {
             .init()
         }
+    }
+}
+
+/// A one-shot rendezvous between the gRPC handler (which must stay suspended) and the UI.
+final class MFAWaiter: @unchecked Sendable {
+    enum Outcome: Sendable { case code(String), cancelled, aborted }
+
+    private let lock = NSLock()
+    private var result: Outcome?
+    private var continuation: CheckedContinuation<Outcome, Never>?
+
+    func wait() async -> Outcome {
+        await withCheckedContinuation { continuation in
+            lock.lock()
+            if let result {
+                lock.unlock()
+                continuation.resume(returning: result)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    func finish(_ outcome: Outcome) {
+        lock.lock()
+        guard result == nil else { lock.unlock(); return }
+        result = outcome
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: outcome)
     }
 }
