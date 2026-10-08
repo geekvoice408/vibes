@@ -62,6 +62,14 @@ struct SettingsView: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 200)
                         }
+                        configRow("Auth connector (--auth)", note: "Blank = automatic. e.g. local, google-saml") {
+                            TextField("", text: Binding(
+                                get: { model.tshAuthConnector },
+                                set: { model.setTshLogin(authConnector: $0) }
+                            ))
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                        }
                         configRow("Auth method (--mfa-mode)") {
                             Picker("", selection: Binding(
                                 get: { model.tshMFAMode },

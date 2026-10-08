@@ -651,7 +651,14 @@ final class AppModel {
     /// One of tsh's --mfa-mode values: auto, cross-platform, platform, otp, sso, browser.
     var tshMFAMode: String = UserDefaults.standard.string(forKey: "tshMFAMode") ?? "browser"
 
-    func setTshLogin(user: String? = nil, mfaMode: String? = nil) {
+    /// tsh login's --auth connector name (e.g. "local", "google-saml"). Empty = pick automatically.
+    var tshAuthConnector: String = UserDefaults.standard.string(forKey: "tshAuthConnector") ?? ""
+
+    func setTshLogin(user: String? = nil, mfaMode: String? = nil, authConnector: String? = nil) {
+        if let authConnector {
+            tshAuthConnector = authConnector
+            UserDefaults.standard.set(authConnector, forKey: "tshAuthConnector")
+        }
         if let user {
             tshLoginUser = user
             UserDefaults.standard.set(user, forKey: "tshLoginUser")
@@ -666,15 +673,17 @@ final class AppModel {
     /// prompts for the password and runs the chosen MFA route; with --mfa-mode=browser that's the
     /// browser's own passkey, which this app's tshd can't use directly. tsh and the daemon share
     /// ~/.tsh, so closing the tab picks up the new session.
-    func loginViaTsh(clusterURI: String) {
+    func loginViaTsh(clusterURI: String, defaultConnector: String = "local") {
         guard let tsh = TshdProcess.locateBinary() else {
             statusMessage = "Couldn't find the tsh binary."
             return
         }
         guard let cluster = clusters.first(where: { $0.uri == clusterURI }) else { return }
-        var command = "\"\(tsh)\" --proxy=\(cluster.proxyHost) login --auth=local"
+        let configured = tshAuthConnector.trimmingCharacters(in: .whitespaces)
+        let connector = configured.isEmpty ? defaultConnector : configured
+        var command = "\"\(tsh)\" --proxy=\(cluster.proxyHost) login --auth=\(connector)"
         let user = tshLoginUser.trimmingCharacters(in: .whitespaces)
-        if !user.isEmpty { command += " --user=\"\(user)\"" }
+        if !user.isEmpty, connector == "local" { command += " --user=\"\(user)\"" }
         if tshMFAMode != "auto" { command += " --mfa-mode=\(tshMFAMode)" }
         command += "; printf '\\n\\nPress Return to close this tab and continue.'; read"
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"

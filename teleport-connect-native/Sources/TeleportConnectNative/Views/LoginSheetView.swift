@@ -21,10 +21,9 @@ struct LoginSheetView: View {
             case .choosingProvider(let clusterURI, let providers, let localAuthEnabled, let allowPasswordless):
                 header(clusterURI: clusterURI)
 
-                if localAuthEnabled {
-                    tshLoginButton(clusterURI: clusterURI)
-                    if allowPasswordless || !providers.isEmpty { orDivider }
-                }
+                let tshConnector = localAuthEnabled ? "local" : (providers.first?.name ?? "local")
+                tshLoginButton(clusterURI: clusterURI, defaultConnector: tshConnector)
+                if allowPasswordless || !providers.isEmpty || localAuthEnabled { orDivider }
 
                 if allowPasswordless {
                     Button {
@@ -237,17 +236,16 @@ struct LoginSheetView: View {
 
     /// Primary sign-in route: tsh runs password + MFA with the browser's passkey, since this app's
     /// own tshd can't use iCloud/browser passkeys (or Touch ID unless registered with tsh).
-    private func tshLoginButton(clusterURI: String) -> some View {
+    private func tshLoginButton(clusterURI: String, defaultConnector: String) -> some View {
         Button {
-            model.loginViaTsh(clusterURI: clusterURI)
+            model.loginViaTsh(clusterURI: clusterURI, defaultConnector: defaultConnector)
         } label: {
             HStack {
                 Image(systemName: "globe")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Log in with passkey in browser").font(.system(size: 14, weight: .medium))
-                    Text(model.tshMFAMode == "browser"
-                         ? "Runs tsh login — password here, passkey in your browser"
-                         : "Runs tsh login with MFA method: \(model.tshMFAMode)")
+                    Text("Runs tsh login --auth=\(model.tshAuthConnector.isEmpty ? defaultConnector : model.tshAuthConnector)"
+                         + (model.tshMFAMode == "auto" ? "" : " --mfa-mode=\(model.tshMFAMode)"))
                         .font(.system(size: 11)).opacity(0.85)
                 }
                 Spacer()
