@@ -1,0 +1,226 @@
+Building for production...
+[2 / 9]
+[3 / 10] SwiftTerm
+[5 / 11] SwiftTerm
+[8 / 9] ServerLife-product
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/City/CityHost.swift:115:22: [1;33mwarning: [1;39mweak variable 'weakHost' was never mutated; consider changing to 'let' constant[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated\VariableNeverMutated]8;;\::]8;;https://docs.swift.org/compiler/documentation/diagnostics/weak-mutability\WeakMutability]8;;\]
+[0;36m113 |[0;0m             let c = CityController(host: host)
+[0;36m114 |[0;0m             host.city = c
+[0;36m115 |[0;0m             weak var weakHost = host
+    [0;36m|[0;0m                      `- [1;33mwarning: [1;39mweak variable 'weakHost' was never mutated; consider changing to 'let' constant[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated\VariableNeverMutated]8;;\::]8;;https://docs.swift.org/compiler/documentation/diagnostics/weak-mutability\WeakMutability]8;;\]
+[0;36m116 |[0;0m             open[ObjectIdentifier(c)] = { weakHost }
+[0;36m117 |[0;0m             c.sync()
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Core/SpawnProcess.swift:80:13: [1;33mwarning: [1;39mvariable 'flags' was never mutated; consider changing to 'let' constant[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated\VariableNeverMutated]8;;\]
+ [0;36m78 |[0;0m             posix_spawn_file_actions_addchdir_np(&actions, cwd)
+ [0;36m79 |[0;0m         }
+ [0;36m80 |[0;0m         var flags = Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)
+    [0;36m|[0;0m             `- [1;33mwarning: [1;39mvariable 'flags' was never mutated; consider changing to 'let' constant[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated\VariableNeverMutated]8;;\]
+ [0;36m81 |[0;0m         posix_spawnattr_setflags(&attr, flags)
+ [0;36m82 |[0;0m         var noSignals = sigset_t(); sigemptyset(&noSignals)
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Fleet/FleetMenu.swift:55:23: [1;33mwarning: [1;39mconformance of 'NSEvent' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+ [0;36m53 |[0;0m         }
+ [0;36m54 |[0;0m         m.monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak m] e in
+ [0;36m55 |[0;0m             MainActor.assumeIsolated {
+    [0;36m|[0;0m                       `- [1;33mwarning: [1;39mconformance of 'NSEvent' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+ [0;36m56 |[0;0m                 guard let m else { return e }
+ [0;36m57 |[0;0m                 if e.type == .keyDown {
+
+/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/AppKit.framework/Headers/NSAccessibility.h: 0:[0;36m187 |[0;0m #ifdef __swift__
+[0;36m188 |[0;0m // This struct is not available in Objective-C. Its only purpose is to create a namespace for accessibility symbols in Swift.
+[0;36m189 |[0;0m typedef struct NSAccessibility { void *_reserved; } NSAccessibility;
+[0;36m    +--- [0;0m [0;36m--------------------------------------------------------------[0;0m
+[0;36m    |[0;0m[0;36m1 |[0;0m @_nonSendable(_assumed)
+[0;36m    |[0;0m  [0;36m|[0;0m `- [1;39mnote: [1;39mconformance of 'NSEvent' to 'Sendable' has been explicitly marked unavailable here[0;0m
+[0;36m    +-----[0;0m[0;36m--------------------------------------------------------------[0;0m
+[0;36m190 |[0;0m #endif
+[0;36m191 |[0;0m 
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Fleet/MacroList.swift:68:71: [1;33mwarning: [1;39mconformance of 'NSMenu' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+ [0;36m66 |[0;0m             return (t == .rightMouseDown || t == .rightMouseUp) ? super.hitTest(point) : nil
+ [0;36m67 |[0;0m         }
+ [0;36m68 |[0;0m         override func menu(for event: NSEvent) -> NSMenu? { MainActor.assumeIsolated { make() } }
+    [0;36m|[0;0m                                                                       `- [1;33mwarning: [1;39mconformance of 'NSMenu' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+ [0;36m69 |[0;0m     }
+ [0;36m70 |[0;0m }
+
+/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/AppKit.framework/Headers/NSAccessibility.h: 0:[0;36m187 |[0;0m #ifdef __swift__
+[0;36m188 |[0;0m // This struct is not available in Objective-C. Its only purpose is to create a namespace for accessibility symbols in Swift.
+[0;36m189 |[0;0m typedef struct NSAccessibility { void *_reserved; } NSAccessibility;
+[0;36m    +--- [0;0m [0;36m--------------------------------------------------------------[0;0m
+[0;36m    |[0;0m[0;36m1 |[0;0m @_nonSendable(_assumed)
+[0;36m    |[0;0m  [0;36m|[0;0m `- [1;39mnote: [1;39mconformance of 'NSMenu' to 'Sendable' has been explicitly marked unavailable here[0;0m
+[0;36m    +-----[0;0m[0;36m--------------------------------------------------------------[0;0m
+[0;36m190 |[0;0m #endif
+[0;36m191 |[0;0m 
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/NetTools/NetProc.swift:58:18: [1;33mwarning: [1;39minstance method 'lock' is unavailable from asynchronous contexts; Use async-safe scoped locking instead; this is an error in the Swift 6 language mode[0;0m
+[0;36m56 |[0;0m         }
+[0;36m57 |[0;0m         let code = await p.wait()
+[0;36m58 |[0;0m         box.lock.lock(); defer { box.lock.unlock() }
+   [0;36m|[0;0m                  `- [1;33mwarning: [1;39minstance method 'lock' is unavailable from asynchronous contexts; Use async-safe scoped locking instead; this is an error in the Swift 6 language mode[0;0m
+[0;36m59 |[0;0m         return Result(code: code, stdout: box.out, stderr: box.err, timedOut: box.timedOut, overflowed: box.overflowed)
+[0;36m60 |[0;0m     }
+
+/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/Foundation.framework/Headers/NSLock.h:15:1: [1;39mnote: [1;39m'lock()' declared here[0;0m
+ [0;36m13 |[0;0m 
+ [0;36m14 |[0;0m /// Attempts to acquire a lock, blocking a thread's execution until the lock can be acquired.
+ [0;36m15 |[0;0m - (void)lock NS_SWIFT_UNAVAILABLE_FROM_ASYNC("Use async-safe scoped locking instead");
+    [0;36m|[0;0m `- [1;39mnote: [1;39m'lock()' declared here[0;0m
+ [0;36m16 |[0;0m 
+ [0;36m17 |[0;0m /// Relinquishes a previously acquired lock.
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/NetTools/NetProc.swift:58:43: [1;33mwarning: [1;39minstance method 'unlock' is unavailable from asynchronous contexts; Use async-safe scoped locking instead; this is an error in the Swift 6 language mode[0;0m
+[0;36m56 |[0;0m         }
+[0;36m57 |[0;0m         let code = await p.wait()
+[0;36m58 |[0;0m         box.lock.lock(); defer { box.lock.unlock() }
+   [0;36m|[0;0m                                           `- [1;33mwarning: [1;39minstance method 'unlock' is unavailable from asynchronous contexts; Use async-safe scoped locking instead; this is an error in the Swift 6 language mode[0;0m
+[0;36m59 |[0;0m         return Result(code: code, stdout: box.out, stderr: box.err, timedOut: box.timedOut, overflowed: box.overflowed)
+[0;36m60 |[0;0m     }
+
+/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/Foundation.framework/Headers/NSLock.h:18:1: [1;39mnote: [1;39m'unlock()' declared here[0;0m
+ [0;36m16 |[0;0m 
+ [0;36m17 |[0;0m /// Relinquishes a previously acquired lock.
+ [0;36m18 |[0;0m - (void)unlock NS_SWIFT_UNAVAILABLE_FROM_ASYNC("Use async-safe scoped locking instead");
+    [0;36m|[0;0m `- [1;39mnote: [1;39m'unlock()' declared here[0;0m
+ [0;36m19 |[0;0m 
+ [0;36m20 |[0;0m @end
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Sessions/SessionsFeature.swift:167:30: [1;33mwarning: [1;39mconformance of 'NSEvent' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+[0;36m165 |[0;0m             let dir = (ch == "+" || (keypad && ch == "+")) ? 1 : (keypad && ch == "-") ? -1 : 0
+[0;36m166 |[0;0m             if dir == 0 { return e }
+[0;36m167 |[0;0m             return MainActor.assumeIsolated {
+    [0;36m|[0;0m                              `- [1;33mwarning: [1;39mconformance of 'NSEvent' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+[0;36m168 |[0;0m                 guard let w = WindowManager.shared.model(for: e.window) else { return e }
+[0;36m169 |[0;0m                 w.feature(SessionsWindow.self).zoom(dir)
+
+/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/AppKit.framework/Headers/NSAccessibility.h: 0:[0;36m187 |[0;0m #ifdef __swift__
+[0;36m188 |[0;0m // This struct is not available in Objective-C. Its only purpose is to create a namespace for accessibility symbols in Swift.
+[0;36m189 |[0;0m typedef struct NSAccessibility { void *_reserved; } NSAccessibility;
+[0;36m    +--- [0;0m [0;36m--------------------------------------------------------------[0;0m
+[0;36m    |[0;0m[0;36m1 |[0;0m @_nonSendable(_assumed)
+[0;36m    |[0;0m  [0;36m|[0;0m `- [1;39mnote: [1;39mconformance of 'NSEvent' to 'Sendable' has been explicitly marked unavailable here[0;0m
+[0;36m    +-----[0;0m[0;36m--------------------------------------------------------------[0;0m
+[0;36m190 |[0;0m #endif
+[0;36m191 |[0;0m 
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Sessions/TermView.swift:13:44: [1;33mwarning: [1;39mconformance of 'SessionTermView' to protocol 'TerminalViewDelegate' crosses into main actor-isolated code and can cause data races; this is an error in the Swift 6 language mode[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/conformance-isolation\ConformanceIsolation]8;;\]
+ [0;36m11 |[0;0m /// output arrives through `write`.
+ [0;36m12 |[0;0m @MainActor
+ [0;36m13 |[0;0m final class SessionTermView: TerminalView, TerminalViewDelegate {
+    [0;36m|[0;0m                                            |- [1;33mwarning: [1;39mconformance of 'SessionTermView' to protocol 'TerminalViewDelegate' crosses into main actor-isolated code and can cause data races; this is an error in the Swift 6 language mode[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/conformance-isolation\ConformanceIsolation]8;;\]
+    [0;36m|[0;0m                                            |- [1;39mnote: [1;39misolate this conformance to the main actor with '@MainActor'[0;0m
+    [0;36m|[0;0m                                            `- [1;39mnote: [1;39mturn data races into runtime errors with '@preconcurrency'[0;0m
+ [0;36m14 |[0;0m     var onInput: ((Data) -> Void)?
+ [0;36m15 |[0;0m     var onResize: ((Int, Int) -> Void)?
+    [0;36m:[0;0m
+[0;36m334 |[0;0m     /// A fit at the end of a resize, not on every frame of one: each size the
+[0;36m335 |[0;0m     /// pty is told is a SIGWINCH, and a full-screen program redraws on each.
+[0;36m336 |[0;0m     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'sizeChanged(source:newCols:newRows:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'sizeChanged(source:newCols:newRows:)' 'nonisolated'[0;0m
+[0;36m337 |[0;0m         resizeWork?.cancel()
+[0;36m338 |[0;0m         let w = DispatchWorkItem { [weak self] in
+    [0;36m:[0;0m
+[0;36m347 |[0;0m     }
+[0;36m348 |[0;0m 
+[0;36m349 |[0;0m     func setTerminalTitle(source: TerminalView, title: String) { onTitle?(title) }
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'setTerminalTitle(source:title:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'setTerminalTitle(source:title:)' 'nonisolated'[0;0m
+[0;36m350 |[0;0m     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'hostCurrentDirectoryUpdate(source:directory:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'hostCurrentDirectoryUpdate(source:directory:)' 'nonisolated'[0;0m
+[0;36m351 |[0;0m     func send(source: TerminalView, data: ArraySlice<UInt8>) { onInput?(Data(data)) }
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'send(source:data:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'send(source:data:)' 'nonisolated'[0;0m
+[0;36m352 |[0;0m     func scrolled(source: TerminalView, position: Double) {}
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'scrolled(source:position:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'scrolled(source:position:)' 'nonisolated'[0;0m
+[0;36m353 |[0;0m     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'rangeChanged(source:startY:endY:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'rangeChanged(source:startY:endY:)' 'nonisolated'[0;0m
+[0;36m354 |[0;0m 
+[0;36m355 |[0;0m     /// An OSC 8 link, cmd-clicked: the same guarded path as any other link.
+[0;36m356 |[0;0m     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'requestOpenLink(source:link:params:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'requestOpenLink(source:link:params:)' 'nonisolated'[0;0m
+[0;36m357 |[0;0m         let w = WindowManager.shared.model(for: window)
+[0;36m358 |[0;0m         Task { await TermLinks.openLink(link, window: w) }
+[0;36m359 |[0;0m     }
+[0;36m360 |[0;0m 
+[0;36m361 |[0;0m     func bell(source: TerminalView) {
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'bell(source:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'bell(source:)' 'nonisolated'[0;0m
+[0;36m362 |[0;0m         if Store.shared.settingJSON("bellSound").bool == true { NSSound.beep() }
+[0;36m363 |[0;0m     }
+    [0;36m:[0;0m
+[0;36m365 |[0;0m     /// OSC 52: a remote program asking for the system clipboard. Capped, so a
+[0;36m366 |[0;0m     /// runaway remote cannot stuff megabytes into it on every redraw.
+[0;36m367 |[0;0m     func clipboardCopy(source: TerminalView, content: Data) {
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'clipboardCopy(source:content:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'clipboardCopy(source:content:)' 'nonisolated'[0;0m
+[0;36m368 |[0;0m         guard !content.isEmpty, content.count <= 150_000 else { return }
+[0;36m369 |[0;0m         Clipboard.write(String(decoding: content, as: UTF8.self))
+[0;36m370 |[0;0m     }
+[0;36m371 |[0;0m 
+[0;36m372 |[0;0m     func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
+    [0;36m|[0;0m          |- [1;39mnote: [1;39mmain actor-isolated instance method 'iTermContent(source:content:)' cannot satisfy nonisolated requirement[0;0m
+    [0;36m|[0;0m          `- [1;39mnote: [1;39mmark instance method 'iTermContent(source:content:)' 'nonisolated'[0;0m
+[0;36m373 |[0;0m }
+[0;36m374 |[0;0m 
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Sessions/WorkspaceView.swift:407:19: [1;33mwarning: [1;39mconformance of 'NSMenu' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+[0;36m405 |[0;0m     /// the only way to it for a screen, a hosts list or a files-only pane.
+[0;36m406 |[0;0m     override func menu(for event: NSEvent) -> NSMenu? {
+[0;36m407 |[0;0m         MainActor.assumeIsolated { s?.paneMenu(paneId, at: NSPoint(x: -1, y: -1)) }
+    [0;36m|[0;0m                   `- [1;33mwarning: [1;39mconformance of 'NSMenu' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+[0;36m408 |[0;0m     }
+[0;36m409 |[0;0m 
+
+/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/AppKit.framework/Headers/NSAccessibility.h: 0:[0;36m187 |[0;0m #ifdef __swift__
+[0;36m188 |[0;0m // This struct is not available in Objective-C. Its only purpose is to create a namespace for accessibility symbols in Swift.
+[0;36m189 |[0;0m typedef struct NSAccessibility { void *_reserved; } NSAccessibility;
+[0;36m    +--- [0;0m [0;36m--------------------------------------------------------------[0;0m
+[0;36m    |[0;0m[0;36m1 |[0;0m @_nonSendable(_assumed)
+[0;36m    |[0;0m  [0;36m|[0;0m `- [1;39mnote: [1;39mconformance of 'NSMenu' to 'Sendable' has been explicitly marked unavailable here[0;0m
+[0;36m    +-----[0;0m[0;36m--------------------------------------------------------------[0;0m
+[0;36m190 |[0;0m #endif
+[0;36m191 |[0;0m 
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Sidebar/SidebarKit.swift:75:34: [1;33mwarning: [1;39mconformance of 'NSMenu' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+ [0;36m73 |[0;0m             let list = MainActor.assumeIsolated { items() }
+ [0;36m74 |[0;0m             guard !list.isEmpty else { return }
+ [0;36m75 |[0;0m             let menu = MainActor.assumeIsolated { CtxMenu.build(list) }
+    [0;36m|[0;0m                                  `- [1;33mwarning: [1;39mconformance of 'NSMenu' to 'Sendable' is unavailable; this is an error in the Swift 6 language mode[0;0m
+ [0;36m76 |[0;0m             NSMenu.popUpContextMenu(menu, with: event, for: self)
+ [0;36m77 |[0;0m         }
+
+/Library/Developer/CommandLineTools/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/AppKit.framework/Headers/NSAccessibility.h: 0:[0;36m187 |[0;0m #ifdef __swift__
+[0;36m188 |[0;0m // This struct is not available in Objective-C. Its only purpose is to create a namespace for accessibility symbols in Swift.
+[0;36m189 |[0;0m typedef struct NSAccessibility { void *_reserved; } NSAccessibility;
+[0;36m    +--- [0;0m [0;36m--------------------------------------------------------------[0;0m
+[0;36m    |[0;0m[0;36m1 |[0;0m @_nonSendable(_assumed)
+[0;36m    |[0;0m  [0;36m|[0;0m `- [1;39mnote: [1;39mconformance of 'NSMenu' to 'Sendable' has been explicitly marked unavailable here[0;0m
+[0;36m    +-----[0;0m[0;36m--------------------------------------------------------------[0;0m
+[0;36m190 |[0;0m #endif
+[0;36m191 |[0;0m 
+
+/Users/paul/git/stuff/serverlife-swift/Sources/ServerLife/Sidebar/SidebarView.swift:39:13: [1;33mwarning: [1;39minitialization of immutable value 's' was never used; consider replacing with assignment to '_' or removing it[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/no-usage\NoUsage]8;;\]
+ [0;36m37 |[0;0m         let p = Theme.shared.p
+ [0;36m38 |[0;0m         let inv = Inventory.shared
+ [0;36m39 |[0;0m         let s = inv.requestSummary()
+    [0;36m|[0;0m             `- [1;33mwarning: [1;39minitialization of immutable value 's' was never used; consider replacing with assignment to '_' or removing it[0;0m [#]8;;https://docs.swift.org/compiler/documentation/diagnostics/no-usage\NoUsage]8;;\]
+ [0;36m40 |[0;0m         HStack(spacing: 0) {
+ [0;36m41 |[0;0m             tab("hosts", "Hosts")
+
+[#ConformanceIsolation]: <https://docs.swift.org/compiler/documentation/diagnostics/conformance-isolation>
+[#NoUsage]: <https://docs.swift.org/compiler/documentation/diagnostics/no-usage>
+[#VariableNeverMutated]: <https://docs.swift.org/compiler/documentation/diagnostics/variable-never-mutated>
+[#WeakMutability]: <https://docs.swift.org/compiler/documentation/diagnostics/weak-mutability>
+[9 / 10] ServerLife-product
+/Users/paul/git/stuff/serverlife-swift/Package.swift: ServerLife-product: ld: warning: search path '/Library/Developer/CommandLineTools/Developer/usr/lib' not found
+/Users/paul/git/stuff/serverlife-swift/Package.swift: ServerLife-product: ld: warning: search path '/Library/Developer/CommandLineTools/Developer/Library/Frameworks' not found
+[12 / 14] ServerLife-product
+[13 / 14] ServerLife-product
+Build complete! (129.90 sec)

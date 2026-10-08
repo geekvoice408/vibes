@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>ServerLife</string>
+  <key>CFBundleDisplayName</key><string>ServerLife</string>
+  <key>CFBundleIdentifier</key><string>dev.serverlife.swift</string>
+  <key>CFBundleVersion</key><string>3</string>
+  <key>CFBundleShortVersionString</key><string>0.15.2</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleExecutable</key><string>ServerLife</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <!-- Network tools fetch whatever URL is asked for, plain http and old TLS
+       included, as the Electron app did; ATS would refuse them. -->
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>ServerLife opens Remote Desktop and Terminal on your behalf when you ask it to.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>ServerLife connects to servers, consoles and screens on your network.</string>
+</dict></plist>
