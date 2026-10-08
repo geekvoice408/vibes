@@ -86,6 +86,9 @@ struct TopBarView: View {
                     Button("Open New Terminal") {
                         model.openLocalShellTab()
                     }
+                    Button("Register Touch ID Passkey…") {
+                        model.registerTouchIDPasskey()
+                    }
                     Button("Open Config File") {
                         model.openConfigFile()
                     }

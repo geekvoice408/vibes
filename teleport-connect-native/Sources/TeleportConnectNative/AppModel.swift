@@ -90,6 +90,8 @@ enum LoginState: Equatable {
     case passwordless
     case waitingForBrowser
     case syncing
+    /// MFA requested outside a login (e.g. per-session MFA) — shows just the MFA prompt.
+    case verifying
     case failed(String)
 }
 
@@ -102,13 +104,21 @@ enum PasswordlessState: Equatable {
     case choosingCredential([String])
 }
 
-/// Driven by TshdEventsServer's promptMFA handler — tshd calls back into us mid-Login when the
-/// cluster requires a second factor (e.g. per-session MFA on a local-auth login), which a plain
-/// unary RPC can't do on its own. See tshd_events_service.proto's PromptMFA doc comment.
-enum MFAPromptState: Equatable {
-    case none
-    case waitingForWebAuthnTap
-    case enteringTOTP
+/// What tshd's PromptMFA callback offered, driven by TshdEventsServer's promptMFA handler (see
+/// tshd_events_service.proto). tshd runs security key/Touch ID itself and races it against
+/// whatever we start here (the browser handoff, or a TOTP code), so we only show status for it.
+struct MFAPrompt: Equatable {
+    var reason: String
+    var webauthn: Bool
+    var totp: Bool
+    /// https://<proxy>/web/mfa/browser/<id> — lets the browser's own passkey (iCloud Keychain,
+    /// 1Password, a phone) answer the challenge; tshd's local redirector receives the result.
+    var browserURL: URL?
+    var ssoURL: URL?
+    var ssoName: String
+    var browserOpened = false
+    /// Show the page in the sheet's web view rather than the system browser.
+    var inApp = false
 }
 
 /// Mirrors TabHost's documents: the always-present Resources tab (doc.cluster) plus any number
@@ -124,6 +134,8 @@ struct TerminalTab: Identifiable {
     let title: String
     let executable: String
     let args: [String]
+    /// When set, closing this tab re-reads that cluster's login state (e.g. after `tsh login`).
+    var refreshClusterURI: String? = nil
 }
 
 enum BrowserChoice: String, CaseIterable, Identifiable {
@@ -225,9 +237,17 @@ final class AppModel {
     var passwordlessState: PasswordlessState = .waitingForTap
     var passwordlessPIN = ""
     private var passwordlessPINResponder: (@Sendable (String) -> Void)?
-    var mfaPromptState: MFAPromptState = .none
+    /// The cluster the most recent login attempt was for (lets the failure screen retry another way).
+    var lastLoginClusterURI: String?
+    var mfaPrompt: MFAPrompt?
     var mfaTOTPCode = ""
-    private var mfaTOTPResponder: (@Sendable (String) -> Void)?
+    private var mfaWaiter: MFAWaiter?
+    private var mfaOpenedSheet = false
+    /// Go straight to the system browser for MFA (default; needed for passkeys, which an embedded
+    /// web view can't use). Turn off to get an in-app window with an "Open in Browser" button.
+    var preferBrowserMFA: Bool = UserDefaults.standard.object(forKey: "preferBrowserMFA") as? Bool ?? true
+    /// Where the in-app MFA web view currently is, so "Open in Browser" continues from there.
+    var mfaCurrentURL: URL?
     private var passwordlessCredentialResponder: (@Sendable (Int) -> Void)?
 
     /// Set once tshd's SSO redirect URL is captured from its stderr — see
@@ -428,6 +448,48 @@ final class AppModel {
         selectedTab = .terminal(tab.id)
     }
 
+    /// tshd wraps failures in a Go "ERROR REPORT" with a full stack trace; the part meant for
+    /// people is the "User Message:" line. Also turns the cryptic no-authenticator case into
+    /// something actionable (see registerTouchIDPasskey()).
+    static func friendlyLoginError(_ error: Error) -> String {
+        let raw = String(describing: error)
+        var message = raw
+        if let range = raw.range(of: #"User Message: [^\]\n]*"#, options: .regularExpression) {
+            message = String(raw[range]).replacingOccurrences(of: "User Message: ", with: "")
+        } else if let range = raw.range(of: #"message: "[^"]*"#, options: .regularExpression) {
+            message = String(raw[range]).replacingOccurrences(of: #"message: ""#, with: "")
+            if let cut = message.range(of: "ERROR REPORT") { message = String(message[..<cut.lowerBound]) }
+        }
+        message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        if message.lowercased().contains("no security keys found") {
+            return "No security key was found, and no Touch ID passkey is registered with tsh for this cluster. "
+                + "Passkeys saved in iCloud Keychain or a browser can't be used by tsh. "
+                + "Use “Log in with passkey in browser” instead, or plug in a security key."
+        }
+        return message.isEmpty ? raw : message
+    }
+
+    /// Opens a terminal tab running `tsh mfa add --type=TOUCHID` for the selected cluster —
+    /// tsh (not this app) owns Touch ID credentials, so this is the supported way to make
+    /// passwordless login use the fingerprint sensor. Needs an existing tsh session.
+    func registerTouchIDPasskey() {
+        guard let tsh = TshdProcess.locateBinary() else {
+            statusMessage = "Couldn't find the tsh binary."
+            return
+        }
+        guard let uri = selectedClusterURI ?? clusters.first?.uri,
+              let cluster = clusters.first(where: { $0.uri == uri }) else {
+            statusMessage = "Add a cluster first."
+            return
+        }
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        let command = "\"\(tsh)\" --proxy=\(cluster.proxyHost) mfa add --type=TOUCHID --name=\"Mac Touch ID\"; "
+            + "printf '\\nFinished. Press Return to close this tab.'; read"
+        let tab = TerminalTab(title: "Register Touch ID", executable: shell, args: ["-l", "-c", command])
+        terminalTabs.append(tab)
+        selectedTab = .terminal(tab.id)
+    }
+
     /// Mirrors the "Open new terminal" action in TopBar/AdditionalActions.tsx (doc.terminal_shell).
     func openLocalShellTab() {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
@@ -467,7 +529,11 @@ final class AppModel {
     }
 
     func closeTerminalTab(_ id: UUID) {
+        let refreshURI = terminalTabs.first { $0.id == id }?.refreshClusterURI
         terminalTabs.removeAll { $0.id == id }
+        if let refreshURI {
+            Task { await reloadCluster(refreshURI) }
+        }
         if selectedTab == .terminal(id) {
             selectedTab = .resources
         }
@@ -477,6 +543,7 @@ final class AppModel {
     /// (single provider, no local auth) or let the user choose (ClusterLogin.tsx's behavior).
     func startLogin(clusterURI: String) async {
         guard let client else { return }
+        lastLoginClusterURI = clusterURI
         loginState = .loadingProviders
         do {
             let settings = try await client.getAuthSettings(clusterURI: clusterURI)
@@ -493,6 +560,8 @@ final class AppModel {
                 if settings.localAuthEnabled, let saved = KeychainCredentialStore.load(clusterURI: clusterURI) {
                     loginUsername = saved.username
                     loginPassword = saved.password
+                } else if loginUsername.isEmpty {
+                    loginUsername = tshLoginUser
                 }
                 loginState = .choosingProvider(
                     clusterURI: clusterURI,
@@ -502,7 +571,7 @@ final class AppModel {
                 )
             }
         } catch {
-            loginState = .failed(String(describing: error))
+            loginState = .failed(Self.friendlyLoginError(error))
         }
     }
 
@@ -528,7 +597,7 @@ final class AppModel {
         } catch {
             urlWatcher.cancel()
             ssoBrowserURL = nil; ssoBrowserCurrentURL = nil
-            loginState = .failed(String(describing: error))
+            loginState = .failed(Self.friendlyLoginError(error))
         }
     }
 
@@ -561,7 +630,7 @@ final class AppModel {
                 }
                 await finishLogin(clusterURI: clusterURI)
             } catch {
-                loginState = .failed(String(describing: error))
+                loginState = .failed(Self.friendlyLoginError(error))
             }
         }
     }
@@ -577,34 +646,152 @@ final class AppModel {
         passwordlessCredentialResponder = nil
     }
 
-    /// Called from TshdEventsServer's promptMFA handler when the cluster wants WebAuthn/Touch ID.
-    /// tshd performs the actual system prompt itself once we've acknowledged; we just show a
-    /// waiting state while that happens.
-    func beginMFAWebAuthnWait() {
-        mfaPromptState = .waitingForWebAuthnTap
+    /// Settings for logging in through the tsh CLI (see loginViaTsh).
+    var tshLoginUser: String = UserDefaults.standard.string(forKey: "tshLoginUser") ?? ""
+    /// One of tsh's --mfa-mode values: auto, cross-platform, platform, otp, sso, browser.
+    var tshMFAMode: String = UserDefaults.standard.string(forKey: "tshMFAMode") ?? "browser"
+
+    /// tsh login's --auth connector name (e.g. "local", "google-saml"). Empty = pick automatically.
+    var tshAuthConnector: String = UserDefaults.standard.string(forKey: "tshAuthConnector") ?? ""
+
+    func setTshLogin(user: String? = nil, mfaMode: String? = nil, authConnector: String? = nil) {
+        if let authConnector {
+            tshAuthConnector = authConnector
+            UserDefaults.standard.set(authConnector, forKey: "tshAuthConnector")
+        }
+        if let user {
+            tshLoginUser = user
+            UserDefaults.standard.set(user, forKey: "tshLoginUser")
+        }
+        if let mfaMode {
+            tshMFAMode = mfaMode
+            UserDefaults.standard.set(mfaMode, forKey: "tshMFAMode")
+        }
     }
 
-    /// Called from TshdEventsServer's promptMFA handler when TOTP is the (only) offered method.
-    /// `respond` resumes the gRPC handler that's blocked waiting for this — call it exactly once.
-    func beginMFATOTPPrompt(respond: @Sendable @escaping (String) -> Void) {
-        mfaTOTPResponder = respond
-        mfaPromptState = .enteringTOTP
+    /// Logs in with `tsh login --auth=local --user=… --mfa-mode=…` in a terminal tab. tsh itself
+    /// prompts for the password and runs the chosen MFA route; with --mfa-mode=browser that's the
+    /// browser's own passkey, which this app's tshd can't use directly. tsh and the daemon share
+    /// ~/.tsh, so closing the tab picks up the new session.
+    func loginViaTsh(clusterURI: String, defaultConnector: String = "local") {
+        guard let tsh = TshdProcess.locateBinary() else {
+            statusMessage = "Couldn't find the tsh binary."
+            return
+        }
+        guard let cluster = clusters.first(where: { $0.uri == clusterURI }) else { return }
+        let configured = tshAuthConnector.trimmingCharacters(in: .whitespaces)
+        let connector = configured.isEmpty ? defaultConnector : configured
+        var command = "\"\(tsh)\" --proxy=\(cluster.proxyHost) login --auth=\(connector)"
+        let user = tshLoginUser.trimmingCharacters(in: .whitespaces)
+        if !user.isEmpty, connector == "local" { command += " --user=\"\(user)\"" }
+        if tshMFAMode != "auto" { command += " --mfa-mode=\(tshMFAMode)" }
+        command += "; printf '\\n\\nPress Return to close this tab and continue.'; read"
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        var tab = TerminalTab(title: "tsh login", executable: shell, args: ["-l", "-c", command])
+        tab.refreshClusterURI = clusterURI
+        terminalTabs.append(tab)
+        selectedTab = .terminal(tab.id)
+        cancelLogin()
+    }
+
+    /// Re-reads a cluster's login state after something outside the daemon (tsh login) changed it.
+    func reloadCluster(_ clusterURI: String) async {
+        guard let client else { return }
+        if let response = try? await client.listRootClusters() {
+            for fresh in response.clusters {
+                if let index = clusters.firstIndex(where: { $0.uri == fresh.uri }) {
+                    let old = clusters[index]
+                    clusters[index] = ClusterRow(
+                        uri: old.uri, name: old.name, connected: fresh.connected, proxyHost: old.proxyHost,
+                        loggedInUserName: old.loggedInUserName, roles: old.roles
+                    )
+                }
+            }
+        }
+        await refreshClusterDetails(clusterURI)
+        await selectCluster(clusterURI)
+    }
+
+    func setPreferBrowserMFA(_ value: Bool) {
+        preferBrowserMFA = value
+        UserDefaults.standard.set(value, forKey: "preferBrowserMFA")
+    }
+
+    /// Called by TshdEventsServer.promptMFA. Shows the MFA UI (raising the login sheet if nothing
+    /// else is up, e.g. for per-session MFA) and, like Connect's ReAuthenticate modal, opens the
+    /// browser straight away when that's the only route or the user prefers it.
+    func beginMFAPrompt(_ request: Teleport_Lib_Teleterm_V1_PromptMFARequest, waiter: MFAWaiter) {
+        mfaWaiter?.finish(.cancelled)
+        mfaWaiter = waiter
+        mfaTOTPCode = ""
+
+        let proxyHost = clusters.first(where: { request.clusterUri.hasPrefix($0.uri) })?.proxyHost
+            ?? clusters.first(where: { $0.uri == selectedClusterURI })?.proxyHost
+        var browserURL: URL?
+        if request.hasBrowser, !request.browser.requestID.isEmpty, let proxyHost {
+            browserURL = URL(string: "https://\(proxyHost)/web/mfa/browser/\(request.browser.requestID)")
+        }
+        let ssoURL = request.hasSso ? URL(string: request.sso.redirectURL) : nil
+
+        var prompt = MFAPrompt(
+            reason: request.reason,
+            webauthn: request.webauthn,
+            totp: request.totp && !request.perSessionMfa,
+            browserURL: browserURL,
+            ssoURL: ssoURL,
+            ssoName: request.hasSso ? (request.sso.displayName.isEmpty ? request.sso.connectorID : request.sso.displayName) : ""
+        )
+        if loginState == .idle {
+            loginState = .verifying
+            mfaOpenedSheet = true
+        }
+        mfaCurrentURL = nil
+        if let url = browserURL ?? ssoURL {
+            if preferBrowserMFA {
+                openInBrowserOfChoice(url)
+                prompt.browserOpened = true
+            } else {
+                prompt.inApp = true
+            }
+        }
+        mfaPrompt = prompt
+    }
+
+    func openMFABrowser() {
+        guard var prompt = mfaPrompt, let url = mfaCurrentURL ?? prompt.browserURL ?? prompt.ssoURL else { return }
+        openInBrowserOfChoice(url)
+        prompt.browserOpened = true
+        prompt.inApp = false
+        mfaPrompt = prompt
     }
 
     func submitMFATOTP() {
-        mfaTOTPResponder?(mfaTOTPCode)
-        mfaTOTPResponder = nil
+        mfaWaiter?.finish(.code(mfaTOTPCode))
+    }
+
+    /// Called when the handler stops waiting (tshd cancelled it because another route won, we
+    /// returned a TOTP code, or the user cancelled).
+    func endMFAPrompt(waiter: MFAWaiter) {
+        guard mfaWaiter === waiter else { return }
+        mfaWaiter = nil
+        mfaPrompt = nil
         mfaTOTPCode = ""
-        mfaPromptState = .none
+        if mfaOpenedSheet {
+            mfaOpenedSheet = false
+            if loginState == .verifying { loginState = .idle }
+        }
+    }
+
+    /// User-initiated cancel: tells tshd to give up on every other MFA route too.
+    private func abortMFAPrompt() {
+        mfaWaiter?.finish(.aborted)
     }
 
     private func clearMFAPrompt() {
-        // Resume any pending TOTP wait with an empty code rather than leaving tshd's promptMFA
-        // call hanging until it times out on its own.
-        mfaTOTPResponder?("")
-        mfaTOTPResponder = nil
+        mfaWaiter?.finish(.cancelled)
+        mfaWaiter = nil
+        mfaPrompt = nil
         mfaTOTPCode = ""
-        mfaPromptState = .none
     }
 
     /// Mirrors loginLocal() in useClusterLogin.ts.
@@ -623,7 +810,7 @@ final class AppModel {
             await finishLogin(clusterURI: clusterURI)
         } catch {
             clearMFAPrompt()
-            loginState = .failed(String(describing: error))
+            loginState = .failed(Self.friendlyLoginError(error))
         }
     }
 
@@ -636,7 +823,7 @@ final class AppModel {
         passwordlessPINResponder = nil
         passwordlessCredentialResponder = nil
         ssoBrowserURL = nil; ssoBrowserCurrentURL = nil
-        clearMFAPrompt()
+        abortMFAPrompt()
     }
 
     /// Mirrors syncAndWatchRootClusterWithErrorHandling — refreshes the cluster's connected
@@ -695,7 +882,7 @@ final class AppModel {
             showClusterPicker = false
             await startLogin(clusterURI: cluster.uri)
         } catch {
-            loginState = .failed(String(describing: error))
+            loginState = .failed(Self.friendlyLoginError(error))
         }
     }
 

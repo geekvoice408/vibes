@@ -34,6 +34,24 @@ do {
             for cluster in response.clusters {
                 print("  - uri=\(cluster.uri) name=\(cluster.name) connected=\(cluster.connected)")
             }
+            if let target = ProcessInfo.processInfo.environment["PASSWORDLESS_CLUSTER"] {
+                print("Starting passwordless login for \(target) — expect a Touch ID / security key prompt")
+                do {
+                    try await client.loginPasswordless(clusterURI: target) { event in
+                        switch event {
+                        case .tap: print("EVENT: tap")
+                        case .retap: print("EVENT: retap")
+                        case .pin: print("EVENT: pin requested")
+                        case .credentials(let names, _): print("EVENT: choose credential among \(names)")
+                        }
+                    }
+                    print("PASSWORDLESS LOGIN SUCCEEDED")
+                } catch {
+                    print("PASSWORDLESS LOGIN FAILED: \(error)")
+                    print("--- tshd output ---")
+                    print(await tshd.collectedOutput())
+                }
+            }
             client.shutdown()
         }
 
