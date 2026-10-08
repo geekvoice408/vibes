@@ -21,6 +21,11 @@ struct LoginSheetView: View {
             case .choosingProvider(let clusterURI, let providers, let localAuthEnabled, let allowPasswordless):
                 header(clusterURI: clusterURI)
 
+                if localAuthEnabled {
+                    tshLoginButton(clusterURI: clusterURI)
+                    if allowPasswordless || !providers.isEmpty { orDivider }
+                }
+
                 if allowPasswordless {
                     Button {
                         model.loginWithPasswordless(clusterURI: clusterURI)
@@ -30,7 +35,7 @@ struct LoginSheetView: View {
                                 .foregroundStyle(Theme.textMain)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Passwordless").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.textMain)
-                                Text("Follow the prompts").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
+                                Text("Needs a security key or a Touch ID passkey registered with tsh").font(.system(size: 11)).foregroundStyle(Theme.textMuted)
                             }
                             Spacer()
                             Image(systemName: "arrow.right").foregroundStyle(Theme.textMuted)
@@ -123,7 +128,13 @@ struct LoginSheetView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(Theme.textMuted)
                         .multilineTextAlignment(.center)
-                    if message.contains("Register Touch ID") {
+                    if message.contains("Log in with passkey in browser") {
+                        Button("Log in with passkey in browser") {
+                            let uri = model.lastLoginClusterURI
+                            model.cancelLogin()
+                            if let uri { model.loginViaTsh(clusterURI: uri) }
+                        }
+                        .buttonStyle(.borderedProminent).tint(Theme.brand)
                         Button("Register Touch ID Passkey…") {
                             model.cancelLogin()
                             model.registerTouchIDPasskey()
@@ -140,7 +151,36 @@ struct LoginSheetView: View {
 
     /// Second-factor screen. tshd tries a security key/Touch ID on its own in parallel; this adds
     /// the browser route (where an iCloud/browser passkey works) and TOTP entry.
+    @ViewBuilder
     private func mfaView(_ prompt: MFAPrompt) -> some View {
+        if prompt.inApp, let url = prompt.browserURL ?? prompt.ssoURL {
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Verify it's you").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.textMain)
+                    Spacer()
+                    Button("Open in Browser") { model.openMFABrowser() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.brand)
+                        .help("Use this for passkeys (iCloud Keychain, 1Password, phone) — an in-app window can't use them.")
+                    Button("Cancel") { model.cancelLogin() }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.textMuted)
+                }
+                .padding(Theme.space[2])
+                Divider()
+                SSOBrowserView(
+                    url: url,
+                    onError: { model.statusMessage = $0 },
+                    onNavigate: { model.mfaCurrentURL = $0 }
+                )
+                .frame(minWidth: 640, minHeight: 520)
+            }
+        } else {
+            mfaFallbackView(prompt)
+        }
+    }
+
+    private func mfaFallbackView(_ prompt: MFAPrompt) -> some View {
         VStack(alignment: .leading, spacing: Theme.space[3]) {
             Text("Verify it's you").font(.system(size: 17)).foregroundStyle(Theme.textMain)
             if !prompt.reason.isEmpty {
@@ -195,8 +235,39 @@ struct LoginSheetView: View {
         }
     }
 
+    /// Primary sign-in route: tsh runs password + MFA with the browser's passkey, since this app's
+    /// own tshd can't use iCloud/browser passkeys (or Touch ID unless registered with tsh).
+    private func tshLoginButton(clusterURI: String) -> some View {
+        Button {
+            model.loginViaTsh(clusterURI: clusterURI)
+        } label: {
+            HStack {
+                Image(systemName: "globe")
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Log in with passkey in browser").font(.system(size: 14, weight: .medium))
+                    Text(model.tshMFAMode == "browser"
+                         ? "Runs tsh login — password here, passkey in your browser"
+                         : "Runs tsh login with MFA method: \(model.tshMFAMode)")
+                        .font(.system(size: 11)).opacity(0.85)
+                }
+                Spacer()
+                Image(systemName: "arrow.right")
+            }
+            .foregroundStyle(.white)
+            .padding(Theme.space[2])
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(Theme.brand)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.radiiMedium))
+        .help("Runs `tsh login --mfa-mode=\(model.tshMFAMode)` in a terminal tab. Change the method in Preferences.")
+    }
+
     private var isShowingBrowser: Bool {
         if case .waitingForBrowser = model.loginState, model.ssoBrowserURL != nil {
+            return true
+        }
+        if model.mfaPrompt?.inApp == true {
             return true
         }
         return false
@@ -345,17 +416,6 @@ struct LoginSheetView: View {
             .buttonStyle(.bordered)
             .frame(maxWidth: .infinity)
             .disabled(model.loginUsername.isEmpty || model.loginPassword.isEmpty)
-
-            Button {
-                model.loginViaTsh(clusterURI: clusterURI)
-            } label: {
-                Text("Log in with tsh (\(model.tshMFAMode == "browser" ? "passkey in browser" : "MFA: \(model.tshMFAMode)"))")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.brand)
-            .padding(.top, Theme.space[1])
-            .help("Runs `tsh login --mfa-mode=\(model.tshMFAMode)` in a terminal tab. Change the method in Preferences.")
         }
     }
 }

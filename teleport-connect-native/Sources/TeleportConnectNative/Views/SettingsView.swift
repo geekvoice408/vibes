@@ -41,7 +41,7 @@ struct SettingsView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        Toggle("Open the browser automatically for MFA (use your passkey there)", isOn: Binding(
+                        Toggle("Use my real browser for MFA instead of an in-app window (needed for passkeys)", isOn: Binding(
                             get: { model.preferBrowserMFA },
                             set: { model.setPreferBrowserMFA($0) }
                         ))

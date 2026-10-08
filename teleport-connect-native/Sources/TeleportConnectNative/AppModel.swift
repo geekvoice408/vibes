@@ -117,6 +117,8 @@ struct MFAPrompt: Equatable {
     var ssoURL: URL?
     var ssoName: String
     var browserOpened = false
+    /// Show the page in the sheet's web view rather than the system browser.
+    var inApp = false
 }
 
 /// Mirrors TabHost's documents: the always-present Resources tab (doc.cluster) plus any number
@@ -235,13 +237,17 @@ final class AppModel {
     var passwordlessState: PasswordlessState = .waitingForTap
     var passwordlessPIN = ""
     private var passwordlessPINResponder: (@Sendable (String) -> Void)?
+    /// The cluster the most recent login attempt was for (lets the failure screen retry another way).
+    var lastLoginClusterURI: String?
     var mfaPrompt: MFAPrompt?
     var mfaTOTPCode = ""
     private var mfaWaiter: MFAWaiter?
     private var mfaOpenedSheet = false
-    /// Open the browser for MFA automatically when the cluster offers it (this app's tshd has no
-    /// way to use iCloud/browser passkeys itself, so it's the route that usually works).
+    /// Go straight to the system browser for MFA (default; needed for passkeys, which an embedded
+    /// web view can't use). Turn off to get an in-app window with an "Open in Browser" button.
     var preferBrowserMFA: Bool = UserDefaults.standard.object(forKey: "preferBrowserMFA") as? Bool ?? true
+    /// Where the in-app MFA web view currently is, so "Open in Browser" continues from there.
+    var mfaCurrentURL: URL?
     private var passwordlessCredentialResponder: (@Sendable (Int) -> Void)?
 
     /// Set once tshd's SSO redirect URL is captured from its stderr — see
@@ -458,7 +464,7 @@ final class AppModel {
         if message.lowercased().contains("no security keys found") {
             return "No security key was found, and no Touch ID passkey is registered with tsh for this cluster. "
                 + "Passkeys saved in iCloud Keychain or a browser can't be used by tsh. "
-                + "Plug in your security key, or register Touch ID for this app (\"...\" menu > Register Touch ID Passkey)."
+                + "Use “Log in with passkey in browser” instead, or plug in a security key."
         }
         return message.isEmpty ? raw : message
     }
@@ -537,6 +543,7 @@ final class AppModel {
     /// (single provider, no local auth) or let the user choose (ClusterLogin.tsx's behavior).
     func startLogin(clusterURI: String) async {
         guard let client else { return }
+        lastLoginClusterURI = clusterURI
         loginState = .loadingProviders
         do {
             let settings = try await client.getAuthSettings(clusterURI: clusterURI)
@@ -729,18 +736,23 @@ final class AppModel {
             loginState = .verifying
             mfaOpenedSheet = true
         }
-        let onlyBrowserRoutes = !prompt.webauthn && !prompt.totp
-        if let url = browserURL ?? ssoURL, preferBrowserMFA || onlyBrowserRoutes {
-            openInBrowserOfChoice(url)
-            prompt.browserOpened = true
+        mfaCurrentURL = nil
+        if let url = browserURL ?? ssoURL {
+            if preferBrowserMFA {
+                openInBrowserOfChoice(url)
+                prompt.browserOpened = true
+            } else {
+                prompt.inApp = true
+            }
         }
         mfaPrompt = prompt
     }
 
     func openMFABrowser() {
-        guard var prompt = mfaPrompt, let url = prompt.browserURL ?? prompt.ssoURL else { return }
+        guard var prompt = mfaPrompt, let url = mfaCurrentURL ?? prompt.browserURL ?? prompt.ssoURL else { return }
         openInBrowserOfChoice(url)
         prompt.browserOpened = true
+        prompt.inApp = false
         mfaPrompt = prompt
     }
 
