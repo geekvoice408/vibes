@@ -16,9 +16,8 @@ struct ThemePreviewView: View {
     @ViewState private var password = "sample-password"
     @ViewState private var mode = "Automatic"
     @ViewState private var enabledOption = true
-    @ViewState private var selection: UUID?
-    @ViewState private var sheet: Sheet?
-
+    @ViewState private var selection: UUID? = nil
+    @ViewState private var sheet: Sheet? = nil
     private enum Sheet: String, Identifiable { case form, backup, credentials; var id: String { rawValue } }
 
     var body: some View {

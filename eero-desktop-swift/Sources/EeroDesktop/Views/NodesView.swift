@@ -65,8 +65,7 @@ enum NodeActions {
 /// Port of `NodePage` (routes "eero nodes" and "Home/eeros").
 struct NodesView: View {
     @ObservedObject var model: AppModel
-    @ViewState private var sheet: DashboardSheet?
-
+    @ViewState private var sheet: DashboardSheet? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Subtitle("Inspect your mesh nodes and restart an individual eero.")
@@ -127,8 +126,7 @@ struct NodeCard: View {
 @MainActor
 struct NodeDetailView: View {
     @ObservedObject var model: AppModel
-    @ViewState private var sheet: DashboardSheet?
-
+    @ViewState private var sheet: DashboardSheet? = nil
     var body: some View {
         let node = model.selectedNode
         Group {

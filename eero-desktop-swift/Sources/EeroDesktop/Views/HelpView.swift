@@ -7,8 +7,7 @@ import EeroCore
 struct HelpView: View {
     @ObservedObject var model: AppModel
     @ViewState private var signedIn = false
-    @ViewState private var sheet: DashboardSheet?
-
+    @ViewState private var sheet: DashboardSheet? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Subtitle("Help & support")

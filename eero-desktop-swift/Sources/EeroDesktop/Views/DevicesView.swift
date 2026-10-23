@@ -8,9 +8,8 @@ struct DevicesView: View {
     @ObservedObject var model: AppModel
     @ViewState private var query = ""
     @ViewState private var statusFilter = "All devices"
-    @ViewState private var selection: String?
-    @ViewState private var sheet: DashboardSheet?
-
+    @ViewState private var selection: String? = nil
+    @ViewState private var sheet: DashboardSheet? = nil
     private static let filters = ["All devices", "Online", "Offline", "Paused", "Blocked"]
 
     private var rows: [DashboardDevice] {

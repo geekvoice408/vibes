@@ -54,8 +54,7 @@ struct RegistrationFlowView: View {
     private enum Step: Equatable { case country, details(country: String, agreements: [JSON]) }
     @ViewState private var step: Step = .country
     /// Set by a successful first step; the form's close then moves on instead of closing the window.
-    @ViewState private var next: Step?
-
+    @ViewState private var next: Step? = nil
     var body: some View {
         Group {
             switch step {

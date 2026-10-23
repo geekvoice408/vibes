@@ -11,7 +11,6 @@ struct ViewState<Value>: DynamicProperty {
     private var storage: State<Value>
 
     init(wrappedValue: Value) { storage = State(initialValue: wrappedValue) }
-    init() where Value: ExpressibleByNilLiteral { storage = State(initialValue: nil) }
 
     var wrappedValue: Value {
         get { storage.wrappedValue }

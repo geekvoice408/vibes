@@ -6,8 +6,7 @@ import EeroCore
 @MainActor
 struct ProfilesView: View {
     @ObservedObject var model: AppModel
-    @ViewState private var sheet: DashboardSheet?
-
+    @ViewState private var sheet: DashboardSheet? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Subtitle("Organize devices, manage internet access, and set scheduled pauses.")
@@ -65,8 +64,7 @@ struct ProfilesView: View {
 @MainActor
 struct ProfileDetailView: View {
     @ObservedObject var model: AppModel
-    @ViewState private var sheet: DashboardSheet?
-
+    @ViewState private var sheet: DashboardSheet? = nil
     var body: some View {
         let profile = model.selectedProfile
         Group {

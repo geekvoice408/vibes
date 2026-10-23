@@ -74,8 +74,7 @@ struct ActivityChart: View {
 struct ActivitySeriesChart: View {
     let item: JSON
     let bytes: Bool
-    @ViewState private var selected: String?
-
+    @ViewState private var selected: String? = nil
     struct Point: Identifiable {
         let id: Int
         let label: String

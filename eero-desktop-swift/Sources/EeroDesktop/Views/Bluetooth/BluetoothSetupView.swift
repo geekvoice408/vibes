@@ -15,8 +15,7 @@ enum BluetoothArea: FeatureArea {
 struct BluetoothSetupView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var scanner: BluetoothScanner
-    @ViewState private var info: PlatformInfo?
-
+    @ViewState private var info: PlatformInfo? = nil
     private var entries: [BluetoothEero] {
         model.preview ? [BluetoothEero.advertisement(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, "4.0.0-Sample-1", -47)] : scanner.results
     }

@@ -146,8 +146,7 @@ struct EditSheet: View {
     @ViewState private var errors: [String: String] = [:]
     @ViewState private var status = ""
     @ViewState private var working = false
-    @ViewState private var confirmation: SheetConfirmation?
-
+    @ViewState private var confirmation: SheetConfirmation? = nil
     init(form: EditForm, model: AppModel, close: @escaping () -> Void) {
         self.form = form; self.model = model; self.close = close
         var t: [String: String] = [:], f: [String: Bool] = [:]

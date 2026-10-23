@@ -419,8 +419,7 @@ struct DashboardDetails: View {
 @MainActor
 struct OverviewView: View {
     @ObservedObject var model: AppModel
-    @ViewState private var sheet: DashboardSheet?
-
+    @ViewState private var sheet: DashboardSheet? = nil
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("Your network at a glance").font(.system(size: 14)).foregroundStyle(DashboardKit.muted).padding(.bottom, 18)
