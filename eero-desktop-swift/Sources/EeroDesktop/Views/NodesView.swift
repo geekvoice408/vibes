@@ -171,7 +171,7 @@ struct NodeDetailView: View {
                                 .buttonStyle(.borderless).padding(.top, 8)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
-                }.frame(maxWidth: .infinity, alignment: .topLeading)
+                }.frame(minWidth: 280, maxWidth: .infinity, alignment: .topLeading)
                 VStack(alignment: .leading, spacing: 16) {
                     Card {
                         VStack(alignment: .leading, spacing: 8) {
@@ -212,7 +212,7 @@ struct NodeDetailView: View {
                                 .foregroundStyle(DashboardKit.danger)
                         }.frame(maxWidth: .infinity, alignment: .leading)
                     }
-                }.frame(maxWidth: .infinity, alignment: .topLeading)
+                }.frame(minWidth: 280, maxWidth: .infinity, alignment: .topLeading)
             }
         }
     }

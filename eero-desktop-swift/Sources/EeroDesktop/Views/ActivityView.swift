@@ -42,15 +42,14 @@ struct ActivityView: View {
                         SectionLink(title: "Speed test history", route: "Home/Internet")
                     }.padding(.top, 18)
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .layoutPriority(1.2)
+                .frame(minWidth: 420, maxWidth: .infinity, alignment: .topLeading)
                 VStack(alignment: .leading, spacing: 12) {
                     RouteRow(title: "Data usage", subtitle: "Daily, weekly, and monthly usage by device", route: "Activity/Data usage")
                     RouteRow(title: "Security activity", subtitle: "Protection and content-filter insights", route: "Activity/Security activity")
                     RouteRow(title: "Network events", subtitle: "Review recent changes and connection events", route: "Activity/Network events")
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .layoutPriority(1)
+                // Fixed-width side column, so the speed card can't squeeze it.
+                .frame(width: 300, alignment: .topLeading)
             }
             if let usage, !usage.isNull {
                 SectionHeader("Data usage").padding(.bottom, 8)

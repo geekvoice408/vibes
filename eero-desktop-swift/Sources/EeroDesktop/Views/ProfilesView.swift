@@ -100,7 +100,7 @@ struct ProfileDetailView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     Card { members(profile) }
                     Card { schedules(profile, schedulesURL) }
-                }.frame(maxWidth: .infinity, alignment: .topLeading)
+                }.frame(minWidth: 280, maxWidth: .infinity, alignment: .topLeading)
                 VStack(alignment: .leading, spacing: 0) {
                     Card { filters(profile) }
                     Card {
@@ -109,7 +109,7 @@ struct ProfileDetailView: View {
                         Button("Delete profile") { if !model.busy { sheet = delete(profile, url) } }
                             .foregroundStyle(DashboardKit.danger)
                     }
-                }.frame(maxWidth: .infinity, alignment: .topLeading)
+                }.frame(minWidth: 280, maxWidth: .infinity, alignment: .topLeading)
             }
         }
     }

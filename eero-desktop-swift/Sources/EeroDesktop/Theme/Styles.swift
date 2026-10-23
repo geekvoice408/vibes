@@ -139,7 +139,7 @@ struct RouteRow: View {
                 Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(Palette.muted).frame(width: 20)
             }
             .padding(.horizontal, 16).padding(.vertical, 14)
-            .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+            .frame(minWidth: 220, maxWidth: .infinity, minHeight: 62, alignment: .leading)
             .background(Palette.surface, in: RoundedRectangle(cornerRadius: 8))
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Palette.edge, lineWidth: 1))
             .contentShape(Rectangle())
@@ -229,8 +229,8 @@ struct TwoColumns<Left: View, Right: View>: View {
     @ViewBuilder var right: () -> Right
     var body: some View {
         HStack(alignment: .top, spacing: 24) {
-            VStack(alignment: .leading, spacing: 0, content: left).frame(maxWidth: .infinity, alignment: .topLeading)
-            VStack(alignment: .leading, spacing: 0, content: right).frame(maxWidth: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 0, content: left).frame(minWidth: 280, maxWidth: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 0, content: right).frame(minWidth: 280, maxWidth: .infinity, alignment: .topLeading)
         }
     }
 }
