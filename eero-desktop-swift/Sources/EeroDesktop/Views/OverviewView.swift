@@ -429,16 +429,15 @@ struct OverviewView: View {
                     meshCard
                     RouteRow(title: "Chat with eero", subtitle: "Get help with your network", route: "Home/Chat")
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .layoutPriority(1.45)
+                .frame(minWidth: 420, maxWidth: .infinity, alignment: .topLeading)
                 VStack(alignment: .leading, spacing: 16) {
                     devicesCard
                     profilesCard
                     RouteRow(title: "Security & privacy", subtitle: "Protection, content filters, and privacy", route: "Home/Security & privacy")
                     RouteRow(title: "Internet backup", subtitle: "Keep your network connected", route: "Settings/Advanced networking/Internet backup")
                 }
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .layoutPriority(1)
+                // A fixed-width side column, so the main column's flexible content can't squeeze it.
+                .frame(width: 300, alignment: .topLeading)
             }
             VStack(alignment: .leading, spacing: 12) {
                 ForEach(model.loadErrors.keys.sorted(), id: \.self) { DashboardAvailability(key: $0, model: model) }
@@ -509,7 +508,7 @@ struct OverviewView: View {
                         Text("Offline").font(.system(size: 12)).foregroundStyle(DashboardKit.muted)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                SectionLink(title: "View all devices", route: "Devices")
+                SectionLink(title: "View all devices", route: "Devices").fixedSize()
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -518,11 +517,9 @@ struct OverviewView: View {
         Card {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Profiles").font(.system(size: 20, weight: .semibold))
-                ForEach(Array(model.profiles.prefix(3).enumerated()), id: \.offset) { _, profile in
-                    RouteRow(title: profile.s("name"), subtitle: DashboardKit.profileSummary(profile), route: "Home/Profiles") {
-                        model.selectedProfile = profile
-                        model.navigate("Home/Profiles/Profile")
-                    }
+                ForEach(Array(model.profiles.prefix(3).enumerated()), id: \.offset) { index, profile in
+                    if index > 0 { Divider() }
+                    ProfileSummaryRow(profile: profile, model: model)
                 }
                 if model.profiles.isEmpty {
                     Text("Create profiles to manage devices and scheduled pauses.").font(.system(size: 12)).foregroundStyle(DashboardKit.muted)
@@ -530,6 +527,35 @@ struct OverviewView: View {
                 SectionLink(title: "Manage profiles", route: "Home/Profiles")
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+/// A borderless profile row inside the Overview's Profiles card.
+struct ProfileSummaryRow: View {
+    let profile: JSON
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Button {
+            if model.busy { return }
+            model.selectedProfile = profile
+            model.navigate("Home/Profiles/Profile")
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "person.crop.circle").font(.system(size: 18)).foregroundStyle(DashboardKit.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(profile.s("name").nilIfEmpty ?? "Unnamed profile").font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1).truncationMode(.tail)
+                    Text(DashboardKit.profileSummary(profile)).font(.system(size: 12)).foregroundStyle(DashboardKit.muted)
+                        .lineLimit(1).truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right").font(.system(size: 11)).foregroundStyle(DashboardKit.muted)
+            }
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -557,7 +583,7 @@ struct CompactNodeRow: View {
                 Text(statusLine).font(.system(size: 11)).foregroundStyle(statusColor)
             }.padding(.trailing, 10)
             Spacer(minLength: 0)
-            HStack(spacing: 0) {
+            HStack(spacing: 14) {
                 Button("View details") {
                     if model.busy { return }
                     model.selectedNode = node
