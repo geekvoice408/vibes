@@ -22,7 +22,7 @@ Not affiliated with or endorsed by Amazon or eero.
 swift build
 swift test
 swift run EeroDesktop --preview   # demonstration data, no network changes
-Scripts/make-app.sh               # builds and ad-hoc signs build/eero Desktop.app
+Scripts/make-app.sh               # builds and ad-hoc signs build/eero Desktop.app for this Mac (UNIVERSAL=1 for arm64+x86_64; needs Xcode)
 ```
 
 `Scripts/make-app.sh` uses `Bundle/Info.plist` and `Bundle/EeroDesktop.entitlements`. Set `SIGN_IDENTITY` to sign with

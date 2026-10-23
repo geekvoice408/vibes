@@ -2,12 +2,19 @@
 # Builds "eero Desktop.app" from the Swift package. Usage: Scripts/make-app.sh [output-dir]
 # Set SIGN_IDENTITY (and TEAM_ID for the network-extension entitlement) to sign with a developer certificate;
 # otherwise the app is ad-hoc signed without the network-extension entitlement.
+# Builds for this Mac's architecture. Set UNIVERSAL=1 for an arm64 + x86_64 app (needs full Xcode, not just
+# the Command Line Tools, because SwiftPM uses XCBuild for multi-architecture builds).
 set -eu
 cd "$(dirname "$0")/.."
 OUT="${1:-build}"
 APP="$OUT/eero Desktop.app"
-swift build -c release --arch arm64 --arch x86_64
-BIN="$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)"
+if [ "${UNIVERSAL:-0}" = 1 ]; then
+  set -- -c release --arch arm64 --arch x86_64
+else
+  set -- -c release
+fi
+swift build "$@"
+BIN="$(swift build "$@" --show-bin-path)"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/EeroDesktop" "$APP/Contents/MacOS/EeroDesktop"
