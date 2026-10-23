@@ -18,7 +18,7 @@ struct BluetoothSetupView: View {
     @State private var info: PlatformInfo?
 
     private var entries: [BluetoothEero] {
-        model.preview ? [BluetoothEero.advertisement(id: "sample", name: "4.0.0-Sample-1", signal: -47)] : scanner.results
+        model.preview ? [BluetoothEero.advertisement(UUID(uuidString: "00000000-0000-0000-0000-000000000001")!, "4.0.0-Sample-1", -47)] : scanner.results
     }
 
     var body: some View {

@@ -540,16 +540,22 @@ struct CompactNodeRow: View {
     @ObservedObject var model: AppModel
     @Binding var sheet: DashboardSheet?
 
-    var body: some View {
-        let online = DashboardKit.isOnline(node)
+    private var online: Bool { DashboardKit.isOnline(node) }
+    private var subtitle: String { (node.b("gateway") ? "Gateway · " : "") + node.s("model") }
+    private var statusLine: String {
         let count = node.s("connected_clients_count")
+        let state: String = online ? "● Online" : "○ " + (node.s("status").nilIfEmpty ?? "Unknown")
+        return count.isEmpty ? state : state + " · " + count + " devices"
+    }
+    private var statusColor: Color { online ? DashboardKit.green : DashboardKit.muted }
+
+    var body: some View {
         HStack(spacing: 0) {
             ProductImage(node: node, size: 52).frame(width: 64, alignment: .leading)
             VStack(alignment: .leading, spacing: 0) {
                 Text(node.first("location", "model")).font(.system(size: 14, weight: .semibold))
-                Text((node.b("gateway") ? "Gateway · " : "") + node.s("model")).font(.system(size: 12)).foregroundStyle(DashboardKit.muted).padding(.bottom, 4)
-                Text((online ? "● Online" : "○ " + (node.s("status").nilIfEmpty ?? "Unknown")) + (count.isEmpty ? "" : " · " + count + " devices"))
-                    .font(.system(size: 11)).foregroundStyle(online ? DashboardKit.green : DashboardKit.muted)
+                Text(subtitle).font(.system(size: 12)).foregroundStyle(DashboardKit.muted).padding(.bottom, 4)
+                Text(statusLine).font(.system(size: 11)).foregroundStyle(statusColor)
             }.padding(.trailing, 10)
             Spacer(minLength: 0)
             HStack(spacing: 0) {
