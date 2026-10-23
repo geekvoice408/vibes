@@ -230,7 +230,7 @@ struct LicenseActivationView: View {
                         let name = model.network.s("name")
                         if !(await model.confirm("Activate this subscription key for " + name + "? Automatic renewal: " + (renew ? "enabled" : "disabled") + ".")) { return }
                         let ok = await state.run(model) {
-                            try await model.cloudChange("POST", "/2.2/license_keys", try ExtendedContracts.license(key, model.validatedNetworkId(), renew), "Subscription key activated.")
+                            try await model.cloudChange("POST", "/2.2/license_keys", try ExtendedContracts.license(key, model.validatedNetworkId(), autoRenew: renew), "Subscription key activated.")
                         }
                         if ok { dismiss() }
                     }

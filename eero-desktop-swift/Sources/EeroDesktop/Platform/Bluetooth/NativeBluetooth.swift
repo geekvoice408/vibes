@@ -91,7 +91,7 @@ final class BluetoothScanner: NSObject, ObservableObject {
         let key = peripheral.identifier.uuidString
         let signal = rssi.intValue == 127 ? (found[key]?.signal ?? -127) : rssi.intValue
         peripherals[key] = peripheral
-        found[key] = BluetoothEero.advertisement(id: key, name: name, signal: signal)
+        found[key] = BluetoothEero.advertisement(peripheral.identifier, name, signal)
     }
 
     // MARK: Identity
@@ -101,8 +101,8 @@ final class BluetoothScanner: NSObject, ObservableObject {
     func readInfo(_ eero: BluetoothEero) async throws -> JSON {
         if reading { throw EeroError.operation("Another Bluetooth read is in progress.") }
         let manager = try await readyCentral()
-        let known = UUID(uuidString: eero.id).map { manager.retrievePeripherals(withIdentifiers: [$0]) } ?? []
-        guard let peripheral = peripherals[eero.id] ?? known.first else {
+        let known = manager.retrievePeripherals(withIdentifiers: [eero.id])
+        guard let peripheral = peripherals[eero.id.uuidString] ?? known.first else {
             throw EeroError.operation(Self.unreachable)
         }
         reading = true

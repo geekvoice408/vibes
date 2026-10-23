@@ -88,9 +88,9 @@ struct LoginView: View {
                 }
                 if !verify {
                     Button("Create an eero account") { if !model.busy { model.beginRegistration() } }
-                    Button("Sign in on eero's website") { if !model.busy { model.websiteSignIn() } }
-                    Button("Sign in through an internet provider") { if !model.busy { model.providerSignIn() } }
-                    Button("Sign in with Amazon") { if !model.busy { model.amazonSignIn() } }
+                    Button("Sign in on eero's website") { if !model.busy { WebFlows.shared.remember = remember; model.websiteSignIn() } }
+                    Button("Sign in through an internet provider") { if !model.busy { WebFlows.shared.remember = remember; model.providerSignIn() } }
+                    Button("Sign in with Amazon") { if !model.busy { WebFlows.shared.remember = remember; model.amazonSignIn() } }
                 }
             }
             .disabled(model.busy)

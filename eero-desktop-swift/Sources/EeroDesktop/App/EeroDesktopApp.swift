@@ -42,7 +42,7 @@ final class AppHost: ObservableObject {
 
 /// The bundled application icon (port of `ApplicationIcon`).
 enum ApplicationIcon {
-    static let image: NSImage? = Bundle.module.url(forResource: "app-icon", withExtension: "png").flatMap(NSImage.init(contentsOf:))
+    static let image: NSImage? = AppResources.bundle.url(forResource: "app-icon", withExtension: "png").flatMap(NSImage.init(contentsOf:))
 
     /// A small template-free copy for the menu bar (port of `CreateTrayIcon`).
     static let menuBarImage: NSImage? = {

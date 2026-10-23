@@ -12,9 +12,9 @@ extension AppModel {
     func openBillingWindow(_ url: String, header: String? = nil) throws {
         if !ServiceLinks.allowed(url) { throw EeroError.operation("The billing service returned an unsupported provider address.") }
         let epoch = account
-        try CloudServiceBrowser.show(title: "eero billing", url: url, headers: header, providerNavigation: true,
-                                     callbackMatch: { BillingContracts.`return`($0) },
-                                     onClose: { [weak self] in
+        openServiceBrowser("eero billing", url, headers: header, callbackMatch: { BillingContracts.`return`($0) },
+                           callback: { _ in }, providerNavigation: true,
+                           onClose: { [weak self] in
             guard let self else { return }
             Task { @MainActor in
                 if await self.api.signedIn && self.account == epoch {
@@ -69,8 +69,8 @@ struct BillingOverviewPage: View {
             CloudObjectCard(value: customer, title: "Current subscription")
             CloudFlow {
                 CloudAction("Refresh benefits / restore access", model) { try await model.refreshBilling() }
-                CloudAction("Manage subscription & payment method", model) { try await model.cloudPaymentService("MANAGE_SUBSCRIPTION") }
-                CloudAction("Purchase history", model) { try await model.cloudPaymentService("MANAGE_PURCHASES") }
+                CloudAction("Manage subscription & payment method", model) { try await model.openPaymentService("MANAGE_SUBSCRIPTION") }
+                CloudAction("Purchase history", model) { try await model.openPaymentService("MANAGE_PURCHASES") }
             }
             SectionLink(title: "Plans, offers & referrals", route: "Settings/Account settings/Subscriptions/Offers & referrals", model: model)
             CloudNote("A billing-window return does not prove that a purchase succeeded. Refresh checks your current entitlement with eero. Purchases made through Google Play or another provider remain managed by that billing provider.")
@@ -139,7 +139,7 @@ struct SupportContactsPage: View {
                 CloudNote("No account-specific support contacts were returned. Open official support for the available contact options.", size: 14)
             }
             CloudLocal("Official eero support", model) {
-                do { try model.cloudOpenService("eero support", "https://www.eero.com/support") }
+                do { try model.openServiceWindow("eero support", "https://www.eero.com/support") }
                 catch { model.setNotice(userMessage(error), error: true) }
             }
         }
@@ -154,8 +154,7 @@ struct SupportContactsPage: View {
                 if link {
                     CloudNote(URL(string: content)?.host ?? "")
                     CloudLocal(type == "CHAT" ? "Open support chat" : "Open support page", model) {
-                        do { try CloudServiceBrowser.show(title: title, url: content, providerNavigation: true) }
-                        catch { model.setNotice(userMessage(error), error: true) }
+                        model.openServiceBrowser(title, content, providerNavigation: true)
                     }
                 } else {
                     Text(content).font(.system(size: 14)).textSelection(.enabled)

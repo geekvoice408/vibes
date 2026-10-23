@@ -5,7 +5,7 @@ import EeroCore
 
 /// Port of the UI in RuntimeFeatures.cs: incoming access invitations, automatic setup, accessories &
 /// cellular, placement tests, subscription web management and eero Insight. The VPN page
-/// (`VpnPage`) is shared with the VPN area: see `VpnPageIntro` / `VpnPageLinks`.
+/// (`VpnPage`) is ported in Views/VPN/VpnView.swift.
 enum RuntimeArea: FeatureArea {
     static let incomingAccess = "Settings/User permissions/Incoming access invitations"
     static let automaticSetup = "Home/Add or replace eero/Automatic setup"
@@ -162,7 +162,7 @@ struct AccessoriesPage: View {
         let serial = accessory.first("dsn", "serial"), eeroId = accessory.s("eero_id")
         return Card {
             VStack(alignment: .leading, spacing: 8) {
-                HardwareImage(node: accessory, size: 72)
+                ProductImage(node: accessory, size: 72)
                 CloudHeading(accessory.first("name", "model"))
                 CloudDetails(value: accessory)
                 CloudFlow {
@@ -230,43 +230,6 @@ struct PlacementPage: View {
     }
 }
 
-// MARK: - VPN page pieces (port of `VpnPage`; the status card and controls belong to the VPN area)
-
-/// Top of the VPN page: subtitle and the eligibility explanation.
-struct VpnPageIntro: View {
-    let route: String
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            CloudSub(text: "VPN powered by Guardian", route: route)
-            CloudNote("Guardian must be included with your eero service. Some internet providers do not offer this benefit. Check eligibility before installing or registering a device.")
-        }
-    }
-}
-
-/// Bottom of the VPN page: Guardian sign-in details and the official Guardian links.
-struct VpnPageLinks: View {
-    @ObservedObject var model: AppModel
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GuardianCredentialsButton(model: model)
-            CloudFlow {
-                CloudLocal("Activate or manage Guardian", model) {
-                    do { try model.cloudOpenService("Guardian VPN", "https://guardianapp.com/login?connect-api-env=wifi-company-prod") }
-                    catch { model.setNotice(userMessage(error), error: true) }
-                }
-                CloudLocal("Guardian Mac download", model) {
-                    do { try model.cloudOfficial("https://guardianapp.com/") } catch { model.setNotice(userMessage(error), error: true) }
-                }
-                CloudLocal("VPN setup instructions", model) {
-                    do { try model.cloudOpenService("Guardian setup", "https://eero.com/support/articles/how-do-i-set-up-vpn-powered-by-guardian") }
-                    catch { model.setNotice(userMessage(error), error: true) }
-                }
-            }
-            CloudNote("Guardian's own Mac app is also available through the download above.")
-        }
-    }
-}
-
 // MARK: - Manage subscriptions & purchases
 
 struct SubscriptionWebPage: View {
@@ -278,9 +241,9 @@ struct SubscriptionWebPage: View {
             CloudSub(text: "Manage subscriptions & purchases", route: route)
             Card { Text("Open eero's subscription service with a temporary account sign-in. Review prices, terms and payment details in the service window before submitting anything.").font(.system(size: 15)).frame(maxWidth: .infinity, alignment: .leading) }
             CloudFlow {
-                CloudAction("Manage subscription", model) { try await model.cloudPaymentService("MANAGE_SUBSCRIPTION") }
-                CloudAction("Manage purchases", model) { try await model.cloudPaymentService("MANAGE_PURCHASES") }
-                CloudAction("Available add-ons", model) { try await model.cloudPaymentService("MOBILE_ADDON_PAYMENT") }
+                CloudAction("Manage subscription", model) { try await model.openPaymentService("MANAGE_SUBSCRIPTION") }
+                CloudAction("Manage purchases", model) { try await model.openPaymentService("MANAGE_PURCHASES") }
+                CloudAction("Available add-ons", model) { try await model.openPaymentService("MOBILE_ADDON_PAYMENT") }
             }
             CloudLocal("Manage a Google Play subscription", model) {
                 if let url = URL(string: "https://play.google.com/store/account/subscriptions") { NSWorkspace.shared.open(url) }
@@ -303,7 +266,7 @@ struct BusinessInsightsPage: View {
             CloudAction("Open eero Insight", model) {
                 if model.preview { throw EeroError.operation("Sign in to open eero Insight.") }
                 let temporary = try await model.api.send("GET", "/2.2/login/temporary")
-                try model.cloudOpenService("eero Insight", "https://insight.eero.com/login/mobile?next=/networks/" + model.validatedNetworkId(),
+                try model.openServiceWindow("eero Insight", "https://insight.eero.com/login/mobile?next=/networks/" + model.validatedNetworkId(),
                                            headers: try ServiceLinks.tokenHeader(temporary.s("temporary_token")))
             }
         }

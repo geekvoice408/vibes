@@ -169,30 +169,6 @@ struct SubnetFiltersPage: View {
     }
 }
 
-// MARK: - Security by radio band
-
-/// Port of `BandSecurity`; the "Security by radio band" action of the wireless settings page.
-struct BandSecurityButton: View {
-    @ObservedObject var model: AppModel
-    @StateObject private var ui = CloudPresenter()
-
-    var body: some View {
-        CloudAction("Security by radio band", model) {
-            let path = try model.featureURL("wpa3_per_band")
-            let data = try await model.cloudRead(path)
-            let modes = ["WPA2", "WPA2_WPA3", "WPA3"]
-            ui.form("Security by radio band", [.choice("band_2_4_ghz", "2.4 GHz security", data.s("band_2_4_ghz"), modes),
-                                               .choice("band_5_ghz", "5 GHz security", data.s("band_5_ghz"), modes)],
-                    description: "6 GHz uses WPA3 as required by that band; this endpoint edits the 2.4 and 5 GHz modes.", model: model) { v in
-                if !(await model.confirm("Change wifi authentication modes? Some devices may need to reconnect or may not support the new mode.")) { return }
-                try await model.cloudChange("PUT", path, .obj(("band_2_4_ghz", v.v("band_2_4_ghz")), ("band_5_ghz", v.v("band_5_ghz"))),
-                                            "Per-band wifi security updated.")
-            }
-        }
-        .cloudSheets(ui, model: model)
-    }
-}
-
 // MARK: - Multiple static IPs
 
 struct MultiStaticPage: View {
@@ -323,56 +299,14 @@ struct BusinessPortalPage: View {
         let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
         if size > (logo ? 5 : 10) * 1024 * 1024 { throw EeroError.argument("This file is too large. Logos support up to 5 MB; PDFs up to 10 MB.") }
         let bytes = try Data(contentsOf: file)
-        let mime = try ExtendedContracts.portalMime(file.path, bytes, logo)
+        let mime = try ExtendedContracts.portalMime(file.path, bytes, logo: logo)
         if !(await model.confirm("Upload \(file.lastPathComponent) (\((bytes.count + 1023) / 1024) KB) as the guest portal \(logo ? "logo" : "terms document")? Guests will be able to access the uploaded asset.")) { return }
         let type = logo ? "CaptivePortalLogo" : "CaptivePortalToS", ext = file.pathExtension.lowercased()
         let upload = try await model.api.send("GET", model.featureURL("file/import/upload_link?importJobType=" + type + "&fileExtension=" + ext))
-        try await PortalUpload.send(upload, bytes, mime)
-        try await model.cloudChange("POST", model.featureURL("file/import/job"), try ExtendedContracts.importJob(upload.s("import_file_path"), logo, configId),
+        try await PortalUpload.send(upload, bytes, mime: mime)
+        try await model.cloudChange("POST", model.featureURL("file/import/job"), try ExtendedContracts.importJob(upload.s("import_file_path"), logo: logo, configId),
                                     "Asset uploaded and import requested. Refresh the portal after processing finishes.")
     }
 }
 
-// MARK: - Portal upload
-
-/// Port of `PortalUpload` (ExtendedFeatures.cs): PUT to the signed S3 URL with a separate, cookie-less
-/// session that never forwards the eero session and does not follow redirects.
-enum PortalUpload {
-    private final class NoRedirect: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-            completionHandler(nil)
-        }
-    }
-
-    static func send(_ upload: JSON, _ data: Data, _ mime: String, session: URLSession? = nil) async throws {
-        let url = try ExtendedContracts.uploadUrl(upload.s("signed_upload_url"))
-        let key = upload.s("kms_key_id")
-        if key.isEmpty || key.count > 2048 || key.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
-            throw EeroError.data("The upload encryption key is missing or invalid.")
-        }
-        let http: URLSession
-        if let session { http = session } else {
-            let config = URLSessionConfiguration.ephemeral
-            config.httpCookieStorage = nil
-            config.httpShouldSetCookies = false
-            config.urlCredentialStorage = nil
-            config.timeoutIntervalForRequest = 120
-            config.timeoutIntervalForResource = 120
-            http = URLSession(configuration: config, delegate: NoRedirect(), delegateQueue: nil)
-        }
-        defer { if session == nil { http.finishTasksAndInvalidate() } }
-        var request = URLRequest(url: url, timeoutInterval: 120)
-        request.httpMethod = "PUT"
-        request.httpShouldHandleCookies = false
-        request.setValue("aws:kms", forHTTPHeaderField: "x-amz-server-side-encryption")
-        request.setValue(key, forHTTPHeaderField: "x-amz-server-side-encryption-aws-kms-key-id")
-        request.setValue(mime, forHTTPHeaderField: "Content-Type")
-        let (_, response) = try await http.upload(for: request, from: data)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if !(200..<300).contains(status) {
-            throw EeroError.operation("The storage service rejected the upload (\(status)). No import was requested.")
-        }
-    }
-}
 #endif

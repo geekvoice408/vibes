@@ -56,7 +56,7 @@ enum ProductImages {
     static func load(_ id: String?) -> NSImage? {
         guard let id, !id.isEmpty else { return nil }
         if let image = cache[id] { return image }
-        guard let url = Bundle.module.url(forResource: id, withExtension: "png", subdirectory: "products"),
+        guard let url = AppResources.bundle.url(forResource: id, withExtension: "png", subdirectory: "products"),
               let image = NSImage(contentsOf: url) else { return nil }
         cache[id] = image
         return image
@@ -70,7 +70,7 @@ enum ProductImages {
 
     /// Port of `Ids`: every bundled product image id, sorted.
     static var ids: [String] {
-        guard let dir = Bundle.module.url(forResource: "products", withExtension: nil),
+        guard let dir = AppResources.bundle.url(forResource: "products", withExtension: nil),
               let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return [] }
         return files.filter { $0.hasSuffix(".png") }.map { String($0.dropLast(4)) }.sorted()
     }

@@ -52,46 +52,6 @@ enum EverydayArea: FeatureArea {
     }
 }
 
-// MARK: - Credentials (Guardian, Thread)
-
-/// Port of `GuardianCredentials`: the "View Guardian sign-in details" action.
-struct GuardianCredentialsButton: View {
-    @ObservedObject var model: AppModel
-    @StateObject private var ui = CloudPresenter()
-
-    var body: some View {
-        CloudAction("View Guardian sign-in details", model) {
-            if model.preview {
-                ui.show(CredentialsView(title: "Sample Guardian sign-in", values: [("Guardian username", "Sample account"), ("Guardian password", "sample-only-password")]))
-                return
-            }
-            if !(await model.confirm("Retrieve your Guardian sign-in details from eero? Use them only in Guardian's official Mac app or website.")) { return }
-            let data = try await model.api.send("POST", "/2.2/partners/guardian")
-            ui.show(CredentialsView(title: "Guardian sign-in", values: try EverydayContracts.guardianLogin(data), order: ["Guardian username", "Guardian password"]))
-        }
-        .cloudSheets(ui, model: model)
-    }
-}
-
-/// The "View Thread credentials" action of the Thread page (uses `ShowCredentials`).
-struct ThreadCredentialsButton: View {
-    let data: JSON
-    @ObservedObject var model: AppModel
-    @StateObject private var ui = CloudPresenter()
-    @State private var status = ""
-
-    var body: some View {
-        CloudLocal("View Thread credentials", model) {
-            do {
-                if model.preview { ui.show(CredentialsView(title: "Thread credentials", values: [("Thread dataset", "Sample-only-dataset")])); return }
-                ui.show(CredentialsView(title: "Thread credentials", values: try EverydayContracts.threadCredentials(data),
-                                        order: ["active operational dataset", "commissioning credential", "master key"]))
-            } catch { model.setNotice(userMessage(error), error: true) }
-        }
-        .cloudSheets(ui, model: model)
-    }
-}
-
 // MARK: - Offers & referrals
 
 struct SubscriptionOffersPage: View {
@@ -114,7 +74,7 @@ struct SubscriptionOffersPage: View {
                 }
                 CloudFlow {
                     CloudAction("Referral status", model) { ui.info("Subscription referrals", try await model.cloudRead(model.featureURL("managed/subscription_referrals"))) }
-                    CloudAction("Manage purchases", model) { try await model.cloudPaymentService("MANAGE_PURCHASES") }
+                    CloudAction("Manage purchases", model) { try await model.openPaymentService("MANAGE_PURCHASES") }
                 }
             }
         }
@@ -164,7 +124,7 @@ struct ReferralLinkView: View {
                 .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.secondary.opacity(0.3)))
             HStack {
                 Button("Copy link") { cloudCopy(url) }
-                Button("Open referral") { do { try model.cloudOpenService("Subscription referral", url) } catch { status = userMessage(error) } }
+                Button("Open referral") { do { try model.openServiceWindow("Subscription referral", url) } catch { status = userMessage(error) } }
                 Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             if !status.isEmpty { Text(status).font(.system(size: 13)).foregroundStyle(.red) }
@@ -300,74 +260,6 @@ struct BackupDiscoveryPage: View {
             if !v.v("password").isEmpty { body["password"] = .string(v.v("password")) }
             try await model.cloudChange("POST", model.featureURL("backup_access_points"), body, "Backup wifi saved.")
         }
-    }
-}
-
-/// Port of `BackupPriority`: reorder saved backup wifi networks. Present it with `CloudPresenter.show`,
-/// or use `BackupPriorityButton`.
-struct BackupPriorityView: View {
-    @ObservedObject var model: AppModel
-    @Environment(\.dismiss) private var dismiss
-    @StateObject private var state = CloudDialogState()
-    @State private var ordered: [JSON]
-    @State private var selected: Int? = 0
-
-    init(networks: [JSON], model: AppModel) { self.model = model; _ordered = State(initialValue: networks) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            CloudHeading("Backup wifi priority", size: 24)
-            CloudNote("Move the preferred backup to the top. All saved backups stay in the order.", size: 14)
-            List(selection: $selected) {
-                Section("Backup wifi (highest priority first)") {
-                    ForEach(Array(ordered.enumerated()), id: \.offset) { index, item in Text(item.s("ssid")).tag(Optional(index)) }
-                }
-            }
-            .frame(height: 240)
-            HStack {
-                Button("Move up") { move(-1) }
-                Button("Move down") { move(1) }
-            }
-            if !state.status.isEmpty { Text(state.status).font(.system(size: 13)).foregroundStyle(.red) }
-            HStack {
-                Button("Save priority") {
-                    Task {
-                        let ok = await state.run(model) {
-                            if model.preview { throw EeroError.operation("Preview mode is read only.") }
-                            try await model.cloudChange("POST", model.featureURL("backup_access_points/rearrange"),
-                                                        try EverydayContracts.backupOrder(ordered.map { $0.s("uuid") }), "Backup priority saved.")
-                        }
-                        if ok { dismiss() }
-                    }
-                }.disabled(state.working)
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(state.working)
-            }
-        }
-        .interactiveDismissDisabled(state.working)
-    }
-
-    private func move(_ offset: Int) {
-        guard let from = selected else { return }
-        let to = from + offset
-        if from < 0 || to < 0 || to >= ordered.count { return }
-        let item = ordered.remove(at: from)
-        ordered.insert(item, at: to)
-        selected = to
-    }
-}
-
-/// The "Backup wifi priority" action of the internet backup page.
-struct BackupPriorityButton: View {
-    let networks: [JSON]
-    @ObservedObject var model: AppModel
-    @StateObject private var ui = CloudPresenter()
-
-    var body: some View {
-        CloudLocal("Backup wifi priority", model) {
-            if networks.count < 2 { model.setNotice("Save at least two backup wifi networks to choose their priority.", error: true); return }
-            ui.show(BackupPriorityView(networks: networks, model: model))
-        }
-        .cloudSheets(ui, model: model)
     }
 }
 

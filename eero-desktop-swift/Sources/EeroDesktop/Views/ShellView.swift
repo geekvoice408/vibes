@@ -72,6 +72,7 @@ struct ShellView: View {
         } detail: {
             detail
         }
+        .featureDialogs(model)
         .onAppear { model.setNotice(model.pageStatus) }
         .task { await autoRefresh() }
     }

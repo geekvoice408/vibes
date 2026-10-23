@@ -23,8 +23,26 @@ extension FeatureArea {
 
 @MainActor
 enum FeatureAreas {
-    /// Every registered area, first match wins. Filled in as areas are ported.
-    static let all: [any FeatureArea.Type] = []
+    /// Every registered area, first match wins. Areas match exact routes; the dashboard area also
+    /// claims top-level pages the shell renders itself, so it goes last.
+    static let all: [any FeatureArea.Type] = [
+        AppearanceArea.self,
+        ConversationArea.self,
+        BluetoothArea.self,
+        VpnArea.self,
+        NetworkCreationArea.self,
+        NetworkingArea.self,
+        ProfilesSecurityArea.self,
+        CloudArea.self,
+        ExtendedArea.self,
+        EverydayArea.self,
+        RuntimeArea.self,
+        BillingArea.self,
+        SupportArea.self,
+        CoreFeatureArea.self,
+        ManagementArea.self,
+        DashboardArea.self,
+    ]
 
     static func area(for route: String) -> (any FeatureArea.Type)? { all.first { $0.handles(route) } }
 

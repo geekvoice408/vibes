@@ -77,6 +77,7 @@ final class AppModel: ObservableObject {
         account = .null; network = .null; selectedProfile = .null; selectedNode = .null
         networkURL = nil; currentPage = "Home"
         networkList = []; devices = []; nodes = []; profiles = []; loadErrors = [:]; featureData = [:]
+        BluetoothScanner.shared.clear()
     }
 
     // MARK: Loading

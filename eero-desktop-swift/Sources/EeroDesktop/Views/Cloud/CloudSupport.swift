@@ -1,7 +1,6 @@
 #if os(macOS)
 import AppKit
 import SwiftUI
-import WebKit
 import EeroCore
 
 // Shared building blocks for the cloud feature pages (ports of the MainWindow helpers
@@ -46,28 +45,11 @@ struct CloudValues {
 // MARK: - Validation shared with the Windows client (App.cs)
 
 enum CloudValidation {
-    static func ssid(_ s: String) throws {
-        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty || t.utf8.count > 32 { throw EeroError.argument("Wifi names must contain between 1 and 32 UTF-8 bytes.") }
-    }
-    static func password(_ s: String) throws {
-        if s.count < 8 || s.count > 63 || s.unicodeScalars.contains(where: { $0.value < 32 || $0.value > 126 }) {
-            throw EeroError.argument("Use a wifi password with 8–63 printable ASCII characters.")
-        }
-    }
-    static func name(_ s: String) throws {
-        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty || t.count > 100 { throw EeroError.argument("Enter a name between 1 and 100 characters.") }
-    }
+    static func ssid(_ s: String) throws { try Validation.validateSsid(s) }
+    static func password(_ s: String) throws { try Validation.validatePassword(s) }
+    static func name(_ s: String) throws { try Validation.validateName(s) }
     /// `FeatureContracts.Address(input, AddressFamily.InterNetwork)`.
-    static func ipv4(_ input: String) throws -> String {
-        let s = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        let bad = EeroError.argument("Enter a valid IPv4 address.")
-        guard s.range(of: #"^(\d{1,3}\.){3}\d{1,3}$"#, options: .regularExpression) != nil else { throw bad }
-        let parts = s.split(separator: ".").compactMap { Int($0) }
-        guard parts.count == 4, parts.allSatisfy({ (0...255).contains($0) }) else { throw bad }
-        return parts.map(String.init).joined(separator: ".")
-    }
+    static func ipv4(_ input: String) throws -> String { try FeatureContracts.address(input, .inet) }
     /// `Uri.TryCreate(..., Absolute) && Scheme == https && UserInfo == ""`.
     static func httpsURL(_ s: String) -> Bool {
         guard let c = URLComponents(string: s), c.scheme?.lowercased() == "https", c.host?.isEmpty == false else { return false }
@@ -122,24 +104,6 @@ extension AppModel {
         currentPage = "Home"
         do { try await loadAccount(); screen = .shell; setNotice(message) }
         catch { screen = .shell; setNotice(message + " Refresh did not finish: " + userMessage(error), error: true) }
-    }
-
-    /// Port of `OpenServiceWindow` (ServiceBrowser.cs) used by the cloud pages.
-    func cloudOpenService(_ title: String, _ url: String, headers: String? = nil, providerNavigation: Bool = false) throws {
-        if !ServiceLinks.allowed(url) && !(providerNavigation && ServiceLinks.providerNavigation(url)) {
-            throw EeroError.operation("The service returned an unsupported provider website.")
-        }
-        try CloudServiceBrowser.show(title: title, url: url, headers: headers, providerNavigation: providerNavigation)
-    }
-
-    /// Port of `OpenPaymentService` (ServiceBrowser.cs): temporary web-payments sign-in, opened in the billing window.
-    func cloudPaymentService(_ targetPage: String) async throws {
-        if preview { throw EeroError.operation("Sign in to manage a subscription.") }
-        let encoded = targetPage.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? targetPage
-        let session = try await api.send("GET", "/2.2/login/temporary?client_type=WEB_PAYMENTS&target_page=" + encoded)
-        let url = session.s("target_url")
-        _ = try ServiceLinks.eero(url)
-        try openBillingWindow(url, header: try ServiceLinks.tokenHeader(session.s("temporary_token")))
     }
 
     /// Port of `MainWindow.Official`: opens an allowed official link in the default browser.
@@ -511,152 +475,4 @@ struct CloudInfoView: View {
     }
 }
 
-/// Port of `ShowCredentials` (EverydayFeatures.cs): masked secrets with reveal and copy.
-struct CredentialsView: View {
-    let title: String
-    let values: [(String, String)]
-    @Environment(\.dismiss) private var dismiss
-    @State private var revealed: Set<Int> = []
-
-    init(title: String, values: [(String, String)]) { self.title = title; self.values = values }
-    /// Dictionary input, ordered by key (the Windows client kept insertion order).
-    init(title: String, values: [String: String], order: [String] = []) {
-        self.title = title
-        let ordered = order.filter { values[$0] != nil } + values.keys.filter { !order.contains($0) }.sorted()
-        self.values = ordered.map { ($0, values[$0]!) }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            CloudHeading(title, size: 24)
-            CloudNote("Reveal or copy only when you need these details. Copied values remain in the macOS clipboard.")
-            ForEach(Array(values.enumerated()), id: \.offset) { index, entry in
-                Text(entry.0).font(.system(size: 14, weight: .semibold))
-                if revealed.contains(index) {
-                    Text(entry.1).textSelection(.enabled).font(.system(.body, design: .monospaced)).fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(String(repeating: "•", count: min(entry.1.count, 24))).foregroundStyle(.secondary)
-                }
-                HStack {
-                    Button(revealed.contains(index) ? "Hide" : "Reveal") {
-                        if revealed.contains(index) { revealed.remove(index) } else { revealed.insert(index) }
-                    }
-                    Button("Copy") { cloudCopy(entry.1) }
-                }
-            }
-            Button("Close") { dismiss() }.keyboardShortcut(.cancelAction)
-        }
-        .onDisappear { revealed = [] }
-    }
-}
-
-// MARK: - Service browser (port of ServiceBrowserWindow as used by these pages)
-
-/// A private (non-persistent) WKWebView window restricted to supported provider websites.
-@MainActor
-final class CloudServiceBrowser: NSObject, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
-    private static var openWindows: [CloudServiceBrowser] = []
-
-    private let window: NSWindow
-    private let web: WKWebView
-    private let address = NSTextField(labelWithString: "")
-    private let notice = NSTextField(wrappingLabelWithString: "Opening secure service…")
-    private let providerNavigation: Bool
-    private let callbackMatch: ((URL) -> Bool)?
-    private let onClose: (() -> Void)?
-    private var completing = false
-
-    static func show(title: String, url: String, headers: String? = nil, providerNavigation: Bool = false,
-                     callbackMatch: ((URL) -> Bool)? = nil, onClose: (() -> Void)? = nil) throws {
-        guard let target = URL(string: url) else { throw EeroError.operation("The service returned an unsupported provider website.") }
-        let browser = CloudServiceBrowser(title: title, url: target, headers: headers, providerNavigation: providerNavigation,
-                                          callbackMatch: callbackMatch, onClose: onClose)
-        openWindows.append(browser)
-        browser.window.makeKeyAndOrderFront(nil)
-    }
-
-    private init(title: String, url: URL, headers: String?, providerNavigation: Bool, callbackMatch: ((URL) -> Bool)?, onClose: (() -> Void)?) {
-        self.providerNavigation = providerNavigation; self.callbackMatch = callbackMatch; self.onClose = onClose
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
-        web = WKWebView(frame: .zero, configuration: config)
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 800),
-                          styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false)
-        super.init()
-        window.title = title + " · eero Desktop"
-        window.minSize = NSSize(width: 850, height: 650)
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        address.stringValue = url.host ?? ""
-        address.font = .systemFont(ofSize: 17, weight: .semibold)
-        let stack = NSStackView(views: [address, web, notice])
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 10
-        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 16, right: 18)
-        web.translatesAutoresizingMaskIntoConstraints = false
-        stack.addConstraint(NSLayoutConstraint(item: web, attribute: .width, relatedBy: .equal, toItem: stack, attribute: .width, multiplier: 1, constant: -36))
-        web.setContentHuggingPriority(.defaultLow, for: .vertical)
-        window.contentView = stack
-        window.center()
-        web.navigationDelegate = self; web.uiDelegate = self
-        var request = URLRequest(url: url)
-        // "x-temp-user-token: …\r\n" — sent only with the initial request (KeepTemporaryHeader).
-        for line in (headers ?? "").components(separatedBy: "\r\n") {
-            guard let colon = line.range(of: ": ") else { continue }
-            request.setValue(String(line[colon.upperBound...]), forHTTPHeaderField: String(line[..<colon.lowerBound]))
-        }
-        web.load(request)
-    }
-
-    private func permitted(_ url: URL) -> Bool {
-        let s = url.absoluteString
-        return ServiceLinks.allowed(s) || (providerNavigation && ServiceLinks.providerNavigation(s))
-    }
-
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        guard let url = navigationAction.request.url else { return .cancel }
-        if navigationAction.targetFrame?.isMainFrame == false { return .allow }
-        if let match = callbackMatch, match(url) {
-            if !completing {
-                completing = true
-                notice.stringValue = "Verifying the service response…"
-                DispatchQueue.main.async { [weak self] in self?.window.close() }
-            }
-            return .cancel
-        }
-        if !permitted(url) {
-            notice.stringValue = "This destination is outside the supported provider websites."
-            return .cancel
-        }
-        if url.scheme == "https" { address.stringValue = (url.host ?? "") + url.path }
-        return .allow
-    }
-
-    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
-                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let url = navigationAction.request.url, permitted(url) || (callbackMatch?(url) ?? false) {
-            webView.load(URLRequest(url: url))
-        } else {
-            notice.stringValue = "The provider requested a destination outside this service window."
-        }
-        return nil
-    }
-
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        notice.stringValue = "Secure provider service. Complete any sign-in or purchase yourself."
-    }
-
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(error) }
-    private func failed(_ error: Error) {
-        let e = error as NSError
-        if e.code == NSURLErrorCancelled || (e.domain == "WebKitErrorDomain" && e.code == 102) { return }
-        notice.stringValue = "The provider page did not finish loading (\(e.localizedDescription))."
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        web.stopLoading()
-        CloudServiceBrowser.openWindows.removeAll { $0 === self }
-        onClose?()
-    }
-}
 #endif

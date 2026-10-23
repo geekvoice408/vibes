@@ -170,10 +170,11 @@ final class SheetConfirmer: ObservableObject {
     }
 }
 
+@MainActor
 extension View {
     func sheetConfirmations(_ c: SheetConfirmer) -> some View {
         alert("Confirm change", isPresented: Binding(get: { c.pending != nil }, set: { shown in
-            if !shown { DispatchQueue.main.async { c.resolve(false) } }
+            if !shown { Task { @MainActor in c.resolve(false) } }
         }), presenting: c.pending) { _ in
             Button("Cancel", role: .cancel) { c.resolve(false) }
             Button("Continue") { c.resolve(true) }
@@ -228,13 +229,17 @@ struct DashboardSheet: Identifiable {
     static func device(_ d: JSON) -> DashboardSheet { .init(kind: .device(d)) }
 }
 
+@MainActor
 extension View {
     /// Presents the dashboard dialogs for `sheet`.
     func dashboardSheet(_ sheet: Binding<DashboardSheet?>, model: AppModel) -> some View {
         self.sheet(item: sheet) { s in
             DashboardSheetContent(sheet: s, model: model) { next in
                 sheet.wrappedValue = nil
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { sheet.wrappedValue = next }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 350_000_000)
+                    sheet.wrappedValue = next
+                }
             }
         }
     }
