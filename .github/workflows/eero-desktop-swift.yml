@@ -39,6 +39,8 @@ jobs:
         run: swift test
       - name: Package app
         run: Scripts/make-app.sh build
+      - name: Package universal app
+        run: UNIVERSAL=1 Scripts/make-app.sh build-universal
       - uses: actions/upload-artifact@v4
         with:
           name: eero-desktop-app-${{ matrix.runner }}
