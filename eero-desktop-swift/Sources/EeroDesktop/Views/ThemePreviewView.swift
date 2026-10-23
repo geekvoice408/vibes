@@ -12,12 +12,12 @@ struct ThemePreviewView: View {
     private struct SampleRow: Identifiable { let id = UUID(); let name: String; let status: String }
     private let rows = [SampleRow(name: "Selected device", status: "Online"), SampleRow(name: "Alternating row", status: "Offline")]
 
-    @State private var networkName = "Sample network name"
-    @State private var password = "sample-password"
-    @State private var mode = "Automatic"
-    @State private var enabledOption = true
-    @State private var selection: UUID?
-    @State private var sheet: Sheet?
+    @ViewState private var networkName = "Sample network name"
+    @ViewState private var password = "sample-password"
+    @ViewState private var mode = "Automatic"
+    @ViewState private var enabledOption = true
+    @ViewState private var selection: UUID?
+    @ViewState private var sheet: Sheet?
 
     private enum Sheet: String, Identifiable { case form, backup, credentials; var id: String { rawValue } }
 
@@ -70,11 +70,11 @@ struct ThemePreviewView: View {
 /// "Sample settings" editor: every field kind with nothing saved.
 private struct SampleFormSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var name = "Sample network"
-    @State private var secret = ""
-    @State private var mode = "Automatic"
-    @State private var enabled = true
-    @State private var note = "Sample text"
+    @ViewState private var name = "Sample network"
+    @ViewState private var secret = ""
+    @ViewState private var mode = "Automatic"
+    @ViewState private var enabled = true
+    @ViewState private var note = "Sample text"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -107,7 +107,7 @@ private struct SampleFormSheet: View {
 /// Sample backup-network priority list with reordering.
 private struct SampleBackupPrioritySheet: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var items = ["Sample phone hotspot", "Sample backup wifi"]
+    @ViewState private var items = ["Sample phone hotspot", "Sample backup wifi"]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

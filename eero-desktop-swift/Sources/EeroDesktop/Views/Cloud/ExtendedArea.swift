@@ -214,7 +214,7 @@ struct LicenseActivationView: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @StateObject private var state = CloudDialogState()
-    @State private var renew = false
+    @ViewState private var renew = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -399,7 +399,7 @@ struct IdentityScanResultView: View {
     let result: JSON
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var status = ""
+    @ViewState private var status = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {

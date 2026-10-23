@@ -23,11 +23,11 @@ struct ProviderChoiceView: View {
     let names: [String]
     let onContinue: (String) -> Void
     let onCancel: () -> Void
-    @State private var selection: String
+    @ViewState private var selection: String
 
     init(names: [String], onContinue: @escaping (String) -> Void, onCancel: @escaping () -> Void) {
         self.names = names; self.onContinue = onContinue; self.onCancel = onCancel
-        _selection = State(initialValue: names.first ?? "")
+        _selection = ViewState(wrappedValue: names.first ?? "")
     }
 
     var body: some View {

@@ -363,7 +363,7 @@ final class ConversationController: ObservableObject {
 
 struct ConversationView: View {
     @ObservedObject var controller: ConversationController
-    @FocusState private var inputFocused: Bool
+    @ViewFocus private var inputFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

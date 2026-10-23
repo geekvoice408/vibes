@@ -15,10 +15,10 @@ struct LoginView: View {
     /// Remembers the chosen sign-in method between screens for this launch (`formatPhone`).
     private static var lastUsedPhone = true
 
-    @State private var usePhone = LoginView.lastUsedPhone
-    @State private var identifier = ""
-    @State private var remember = true
-    @State private var code = ""
+    @ViewState private var usePhone = LoginView.lastUsedPhone
+    @ViewState private var identifier = ""
+    @ViewState private var remember = true
+    @ViewState private var code = ""
 
     var body: some View {
         GeometryReader { g in

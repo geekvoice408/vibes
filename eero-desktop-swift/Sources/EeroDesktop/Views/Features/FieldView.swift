@@ -141,12 +141,12 @@ struct EditSheet: View {
     @ObservedObject var model: AppModel
     let close: () -> Void
 
-    @State private var text: [String: String]
-    @State private var flags: [String: Bool]
-    @State private var errors: [String: String] = [:]
-    @State private var status = ""
-    @State private var working = false
-    @State private var confirmation: SheetConfirmation?
+    @ViewState private var text: [String: String]
+    @ViewState private var flags: [String: Bool]
+    @ViewState private var errors: [String: String] = [:]
+    @ViewState private var status = ""
+    @ViewState private var working = false
+    @ViewState private var confirmation: SheetConfirmation?
 
     init(form: EditForm, model: AppModel, close: @escaping () -> Void) {
         self.form = form; self.model = model; self.close = close
@@ -160,7 +160,7 @@ struct EditSheet: View {
             default: t[field.key] = field.value.string
             }
         }
-        _text = State(initialValue: t); _flags = State(initialValue: f)
+        _text = ViewState(wrappedValue: t); _flags = ViewState(wrappedValue: f)
     }
 
     var body: some View {

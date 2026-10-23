@@ -23,7 +23,7 @@ struct CreateNetworkPage: View {
     @ObservedObject var model: AppModel
     @StateObject private var sheets = NetSheets()
     /// Bumped to re-render after the (non-observable) setup state changes (`RenderPage`).
-    @State private var revision = 0
+    @ViewState private var revision = 0
 
     private var setup: WiredNetworkSetup { NetworkCreationArea.wiredSetup }
 

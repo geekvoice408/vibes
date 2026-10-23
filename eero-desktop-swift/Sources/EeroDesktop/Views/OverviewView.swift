@@ -269,9 +269,9 @@ struct DashboardFormSheet: View {
     let form: DashboardForm
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var values: [String: String] = [:]
-    @State private var status = ""
-    @State private var working = false
+    @ViewState private var values: [String: String] = [:]
+    @ViewState private var status = ""
+    @ViewState private var working = false
     @StateObject private var confirmer = SheetConfirmer()
 
     var body: some View {
@@ -419,7 +419,7 @@ struct DashboardDetails: View {
 @MainActor
 struct OverviewView: View {
     @ObservedObject var model: AppModel
-    @State private var sheet: DashboardSheet?
+    @ViewState private var sheet: DashboardSheet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

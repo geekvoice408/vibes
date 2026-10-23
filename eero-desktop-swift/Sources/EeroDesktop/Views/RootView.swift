@@ -7,7 +7,7 @@ import EeroCore
 @MainActor
 struct RootView: View {
     @ObservedObject var model: AppModel
-    @State private var started = false
+    @ViewState private var started = false
 
     var body: some View {
         Group {

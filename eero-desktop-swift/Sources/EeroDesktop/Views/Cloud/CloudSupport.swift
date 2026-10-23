@@ -395,8 +395,8 @@ struct CloudFormView: View {
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     @StateObject private var state = CloudDialogState()
-    @State private var text: [String: String]
-    @State private var flags: [String: Bool]
+    @ViewState private var text: [String: String]
+    @ViewState private var flags: [String: Bool]
 
     init(form: CloudForm, model: AppModel) {
         self.form = form; self.model = model
@@ -404,7 +404,7 @@ struct CloudFormView: View {
         for field in form.fields where !field.key.isEmpty {
             if field.kind == .bool { f[field.key] = field.flag } else { t[field.key] = field.text }
         }
-        _text = State(initialValue: t); _flags = State(initialValue: f)
+        _text = ViewState(wrappedValue: t); _flags = ViewState(wrappedValue: f)
     }
 
     private func binding(_ key: String) -> Binding<String> {

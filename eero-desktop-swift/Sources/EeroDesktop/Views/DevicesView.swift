@@ -6,10 +6,10 @@ import EeroCore
 @MainActor
 struct DevicesView: View {
     @ObservedObject var model: AppModel
-    @State private var query = ""
-    @State private var statusFilter = "All devices"
-    @State private var selection: String?
-    @State private var sheet: DashboardSheet?
+    @ViewState private var query = ""
+    @ViewState private var statusFilter = "All devices"
+    @ViewState private var selection: String?
+    @ViewState private var sheet: DashboardSheet?
 
     private static let filters = ["All devices", "Online", "Offline", "Paused", "Blocked"]
 
@@ -117,14 +117,14 @@ struct DeviceDetailSheet: View {
     let device: JSON
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var nickname: String
-    @State private var status = ""
+    @ViewState private var nickname: String
+    @ViewState private var status = ""
     @StateObject private var confirmer = SheetConfirmer()
 
     init(device: JSON, model: AppModel) {
         self.device = device
         self.model = model
-        _nickname = State(initialValue: DashboardDevice(device).name)
+        _nickname = ViewState(wrappedValue: DashboardDevice(device).name)
     }
 
     private var row: DashboardDevice { DashboardDevice(device) }

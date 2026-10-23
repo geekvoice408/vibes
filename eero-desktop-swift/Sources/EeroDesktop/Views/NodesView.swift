@@ -65,7 +65,7 @@ enum NodeActions {
 /// Port of `NodePage` (routes "eero nodes" and "Home/eeros").
 struct NodesView: View {
     @ObservedObject var model: AppModel
-    @State private var sheet: DashboardSheet?
+    @ViewState private var sheet: DashboardSheet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -127,7 +127,7 @@ struct NodeCard: View {
 @MainActor
 struct NodeDetailView: View {
     @ObservedObject var model: AppModel
-    @State private var sheet: DashboardSheet?
+    @ViewState private var sheet: DashboardSheet?
 
     var body: some View {
         let node = model.selectedNode
@@ -273,8 +273,8 @@ struct NodePortsSheet: View {
     let connections: JSON
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var working = false
-    @State private var status = ""
+    @ViewState private var working = false
+    @ViewState private var status = ""
     @StateObject private var confirmer = SheetConfirmer()
 
     static let portActions = ["ENABLE_DATA", "DISABLE_DATA", "ENABLE_POE", "DISABLE_POE", "ENABLE_PORT", "DISABLE_PORT", "RESTART_POWER", "ENABLE_PORT_SECURITY", "DISABLE_PORT_SECURITY"]

@@ -101,15 +101,15 @@ extension ManagementArea {
 @MainActor
 struct ManagementBackupPriority: View {
     @ObservedObject var model: AppModel
-    @State private var ordered: [JSON]
-    @State private var selected: Int? = 0
-    @State private var status = ""
-    @State private var working = false
+    @ViewState private var ordered: [JSON]
+    @ViewState private var selected: Int? = 0
+    @ViewState private var status = ""
+    @ViewState private var working = false
     let done: () -> Void
 
     init(model: AppModel, networks: [JSON], done: @escaping () -> Void) {
         self.model = model; self.done = done
-        _ordered = State(initialValue: networks)
+        _ordered = ViewState(wrappedValue: networks)
     }
 
     var body: some View {

@@ -102,8 +102,8 @@ private struct ThemeSample: View {
 private struct StartupSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var preferences = UiPreferences.shared
-    @State private var message = ""
-    @State private var failed = false
+    @ViewState private var message = ""
+    @ViewState private var failed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

@@ -299,8 +299,8 @@ private struct SheetError: View {
 struct VpnRegisterSheet: View {
     @ObservedObject var model: AppModel
     @ObservedObject var vpn: VpnController
-    @State var nickname: String
-    @State private var agree = false
+    @ViewState var nickname: String
+    @ViewState private var agree = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -333,7 +333,7 @@ struct VpnRegionSheet: View {
     @ObservedObject var model: AppModel
     @ObservedObject var vpn: VpnController
     let choices: [String: String]
-    @State private var selected = ""
+    @ViewState private var selected = ""
     @Environment(\.dismiss) private var dismiss
 
     private var keys: [String] { choices.keys.sorted() }
@@ -402,7 +402,7 @@ struct VpnDevicesSheet: View {
 struct VpnCredentialsSheet: View {
     let title: String
     let values: [(String, String)]
-    @State private var revealed = false
+    @ViewState private var revealed = false
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

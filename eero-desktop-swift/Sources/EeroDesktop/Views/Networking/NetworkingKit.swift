@@ -227,10 +227,10 @@ struct NetEditSheet: View {
     var onClose: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
     @StateObject private var confirmer = NetConfirmer()
-    @State private var text: [String: String]
-    @State private var flags: [String: Bool]
-    @State private var status = ""
-    @State private var working = false
+    @ViewState private var text: [String: String]
+    @ViewState private var flags: [String: Bool]
+    @ViewState private var status = ""
+    @ViewState private var working = false
 
     init(request: NetEditRequest, model: AppModel, onClose: (() -> Void)? = nil) {
         self.request = request; self.model = model; self.onClose = onClose
@@ -246,7 +246,7 @@ struct NetEditSheet: View {
             default: t[field.key] = field.value.string
             }
         }
-        _text = State(initialValue: t); _flags = State(initialValue: f)
+        _text = ViewState(wrappedValue: t); _flags = ViewState(wrappedValue: f)
     }
 
     private func close() { if let onClose { onClose() } else { dismiss() } }
@@ -423,7 +423,7 @@ struct NetInfoSheet: View {
 
 /// Port of `ShowPassword`.
 struct NetPasswordSheet: View {
-    @State var password: String
+    @ViewState var password: String
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -457,8 +457,8 @@ struct NetQRSheet: View {
 /// Port of `ShowCredentials`.
 struct NetCredentialsSheet: View {
     let title: String
-    @State var values: [(String, String)]
-    @State private var revealed: Set<Int> = []
+    @ViewState var values: [(String, String)]
+    @ViewState private var revealed: Set<Int> = []
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

@@ -6,7 +6,7 @@ import EeroCore
 @MainActor
 struct ProfilesView: View {
     @ObservedObject var model: AppModel
-    @State private var sheet: DashboardSheet?
+    @ViewState private var sheet: DashboardSheet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -65,7 +65,7 @@ struct ProfilesView: View {
 @MainActor
 struct ProfileDetailView: View {
     @ObservedObject var model: AppModel
-    @State private var sheet: DashboardSheet?
+    @ViewState private var sheet: DashboardSheet?
 
     var body: some View {
         let profile = model.selectedProfile
@@ -274,14 +274,14 @@ struct ProfileDevicesSheet: View {
     let profile: JSON
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var checked: Set<String>
-    @State private var working = false
-    @State private var status = ""
+    @ViewState private var checked: Set<String>
+    @ViewState private var working = false
+    @ViewState private var status = ""
 
     init(profile: JSON, model: AppModel) {
         self.profile = profile
         self.model = model
-        _checked = State(initialValue: Set(profile["devices"].list.map { $0.s("url") }))
+        _checked = ViewState(wrappedValue: Set(profile["devices"].list.map { $0.s("url") }))
     }
 
     /// Network devices plus current members, unique by url.

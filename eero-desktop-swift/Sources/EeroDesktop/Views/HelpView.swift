@@ -6,8 +6,8 @@ import EeroCore
 @MainActor
 struct HelpView: View {
     @ObservedObject var model: AppModel
-    @State private var signedIn = false
-    @State private var sheet: DashboardSheet?
+    @ViewState private var signedIn = false
+    @ViewState private var sheet: DashboardSheet?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

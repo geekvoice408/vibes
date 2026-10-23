@@ -115,7 +115,7 @@ struct ReferralLinkView: View {
     let url: String
     @ObservedObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
-    @State private var status = ""
+    @ViewState private var status = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             CloudHeading("Subscription referral", size: 24)
