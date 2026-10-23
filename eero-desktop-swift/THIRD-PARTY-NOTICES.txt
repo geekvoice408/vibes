@@ -1,0 +1,68 @@
+QRCoder 1.6.0 (net40 assembly)
+https://github.com/codebude/QRCoder
+License at source commit bd980577640c47f8bb881cf24c8443415a579d36
+
+The MIT License (MIT)
+
+Copyright (c) 2013-2018 Raffael Herrmann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+
+Microsoft Edge WebView2 SDK 1.0.4258.31
+https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.4258.31
+https://learn.microsoft.com/en-us/microsoft-edge/webview2/
+Managed Core/WPF libraries and Windows x64/x86/ARM64 native loaders.
+Copyright (C) Microsoft Corporation. All rights reserved.
+Full redistribution license is included in LICENSE-WebView2.txt.
+The separately installed WebView2 Runtime is not redistributed.
+
+Microsoft.Windows.SDK.Contracts 10.0.19041.1 is a build-only NuGet
+dependency; its metadata is not included in the binary distribution.
+
+Guardian Connect for Windows
+https://github.com/GuardianFirewall/GuardianConnect-Windows
+Copyright (c) 2026 Guardian Firewall. MIT license.
+The VPN service contracts and configuration format were checked against this
+SDK. The independent .NET Framework adapter implements
+the relevant API calls. LICENSE-Guardian.txt contains the SDK's full license.
+The SDK binaries, its service and its native drivers are not redistributed.
+
+WireGuard for Windows
+https://www.wireguard.com/
+https://git.zx2c4.com/wireguard-windows/about/docs/enterprise.md
+WireGuard is a separately installed component. This app invokes its documented
+tunnel service commands after explicit user action and Windows administrator
+approval. No WireGuard executable, installer or driver is included in the ZIP.
+The installer is downloaded only when requested; Windows verifies its digital
+signature and the app checks the WireGuard LLC publisher before launching it.
+
+eero product imagery and marks
+https://eero.com/shop
+https://eero.com/support/articles/what-are-the-model-numbers-for-each-eero
+Copyright Amazon.com, Inc./eero LLC and their respective rights holders.
+Product photographs identify the corresponding hardware in this independent
+client; this does not imply affiliation, endorsement or a trademark license.
+The first-generation eero is represented by eero's rear-port illustration.
+Telephone Adapter image source: Aussie Broadband's official hardware catalog:
+https://www.aussiebroadband.com.au/internet/hardware/
+Individual source URLs, retrieval date and file hashes are recorded in
+assets/products/sources.json. Images are resized for UI display, preserving
+their proportions and transparency; only fully transparent padding is trimmed.
+No photography rights are assigned by this application's source distribution.

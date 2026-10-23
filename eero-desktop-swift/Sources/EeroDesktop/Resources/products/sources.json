@@ -1,0 +1,246 @@
+{
+  "retrieved": "2026-10-22",
+  "copyright": "Product photography and eero marks belong to Amazon/eero. Used to identify hardware; no affiliation or endorsement.",
+  "products": [
+    {
+      "id": "eero-gen2",
+      "model": "eero (2nd gen)",
+      "file": "eero-gen2.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-C-angle-D-1366.png?v=1647380741",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "eb1152f58901148631245fa2c23b7314aa6ba82e9f88753f396b4ef27d4f0a97",
+      "size": [
+        376,
+        244
+      ]
+    },
+    {
+      "id": "eero-pro",
+      "model": "eero Pro",
+      "file": "eero-pro.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-U-angle-D-1366.png?v=1647381051",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "7d78f5bc7b3ae64af72f91aab067e113a3767be49094fda0d399fd928cd5a786",
+      "size": [
+        367,
+        244
+      ]
+    },
+    {
+      "id": "eero-beacon",
+      "model": "eero Beacon",
+      "file": "eero-beacon.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-P-angle-D-1366.png?v=1647380985",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "db6015f2519d67256f75ce3ac4851b070329b6f1e87b9b952ff2967ef351d711",
+      "size": [
+        166,
+        250
+      ]
+    },
+    {
+      "id": "eero-6",
+      "model": "eero 6",
+      "file": "eero-6.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-AG-angle-D-1366.png?v=1647380817",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "7ec03f73674fbbc79ce3633935a4595891efcf1d9177fc13870001ea715432d0",
+      "size": [
+        382,
+        235
+      ]
+    },
+    {
+      "id": "eero-6-extender",
+      "model": "eero 6 Extender",
+      "file": "eero-6-extender.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-A-angle-D-1366.png?v=1647380864",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "7ec03f73674fbbc79ce3633935a4595891efcf1d9177fc13870001ea715432d0",
+      "size": [
+        382,
+        235
+      ]
+    },
+    {
+      "id": "eero-6-plus",
+      "model": "eero 6+",
+      "file": "eero-6-plus.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-F-angle-D-1366.png?v=1647380941",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "69926b9fd7c1d7f2f3aff0e6f3530d460974db3151b33465a36a9f1d15d02cdc",
+      "size": [
+        293,
+        240
+      ]
+    },
+    {
+      "id": "eero-6-plus-extender",
+      "model": "eero 6+ Extender",
+      "file": "eero-6-plus-extender.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/tQ1XuZ0m0hOGdNpQ2zZWo/860b9f92708bb2071884a41aec82b255/Compare-F-angle-D-1366.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "69926b9fd7c1d7f2f3aff0e6f3530d460974db3151b33465a36a9f1d15d02cdc",
+      "size": [
+        293,
+        240
+      ]
+    },
+    {
+      "id": "eero-pro-6",
+      "model": "eero Pro 6",
+      "file": "eero-pro-6.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-E-angle-D-1366_dce00f18-8f4d-4ccc-81d3-d8b1bae2b00c.png?v=1647381034",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "48138e905b7f71738869a33989c6f40c09348f6bf8b2acb3cf6d6189a9cde6b1",
+      "size": [
+        318,
+        206
+      ]
+    },
+    {
+      "id": "eero-pro-6e",
+      "model": "eero Pro 6E",
+      "file": "eero-pro-6e.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/products/Compare-T-angle-D-1366.png?v=1647381114",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "db552a780a305b7adc17e538bcedb49e3f07d9e9eaa92d54e4e127eef9c19568",
+      "size": [
+        332,
+        220
+      ]
+    },
+    {
+      "id": "eero-poe-6",
+      "model": "eero PoE 6",
+      "file": "eero-poe-6.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/1JL6KhV9pCve22cY5khKUn/1986e9f79e957812afbffb1641ad771c/Results_H_Medium_1x.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "29fa203035f8e58d48aaf6f2725c15be77b9261b42ce609704c51b630ac0e781",
+      "size": [
+        224,
+        224
+      ]
+    },
+    {
+      "id": "eero-poe-gateway",
+      "model": "eero PoE Gateway",
+      "file": "eero-poe-gateway.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/3Z6N8tnc9GYEL95JwASTQ5/9da497457611132b7af06265ffe15e6f/eero_Poe_Gateway.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "65ce1effffb0d9ccf0dda33e7655cf3b18d2476203a48e3c68c75b92086ac848",
+      "size": [
+        384,
+        188
+      ]
+    },
+    {
+      "id": "eero-max-7",
+      "model": "eero Max 7",
+      "file": "eero-max-7.png",
+      "source_url": "https://cdn.shopify.com/s/files/1/0870/4346/files/Compare_J_700_1x_1c320727-49ec-4a94-981a-f46475bd7dc6.png?v=1694588833",
+      "source_page": "https://eero.com/shop/eero-beacon",
+      "sha256": "40f4216b4d934659be9ec48605a6f27bd75c9a9a97705028da2897f580464203",
+      "size": [
+        146,
+        256
+      ]
+    },
+    {
+      "id": "eero-7",
+      "model": "eero 7",
+      "file": "eero-7.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/5QTy4rFZoXDoazVHxcmqTi/4bf6fa9e2eea370972c23e1e61c71c24/Results_P_Medium_1x.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "eb3f5f47cbfe08bfbdbf0a990e872db197478a2d49f35c32c77caef1370bf5b5",
+      "size": [
+        284,
+        133
+      ]
+    },
+    {
+      "id": "eero-pro-7",
+      "model": "eero Pro 7",
+      "file": "eero-pro-7.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/2cu6zGZI4eszCShUfX0RVz/c614cec832ee1619de281b8124c79235/Results_M_Medium_1x.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "280b259509c452778c733eabbe2fa0e5b7f31957b65a1ad6856ab6332c555305",
+      "size": [
+        195,
+        225
+      ]
+    },
+    {
+      "id": "eero-outdoor-7",
+      "model": "eero Outdoor 7",
+      "file": "eero-outdoor-7.png",
+      "source_url": "https://assets.prod.eero.com/static-assets/img/product-snowbird/snowbird.png",
+      "source_page": "https://eero.com/shop/eero-outdoor-7",
+      "sha256": "ab4a11838335f80e3dd1fb9d42505a3ecb099eabeac682f2f6d350bad4089156",
+      "size": [
+        182,
+        256
+      ]
+    },
+    {
+      "id": "eero-poe-7",
+      "model": "eero PoE 7",
+      "file": "eero-poe-7.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/JVBWGM0qpQWOqwVrs4lzI/1893b710ba44eb13775a1ee1c4a22c6c/Results_N_Medium_1x.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "a434b58bab5cd05311ed2db6743b0738d6658abe286bb95d384ab4ae20df70fd",
+      "size": [
+        253,
+        256
+      ]
+    },
+    {
+      "id": "eero-signal-4g",
+      "model": "eero Signal 4G LTE",
+      "file": "eero-signal-4g.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/7K4AYwBkhrviJG3Je8JPv8/9fe7cd601b5b076df9bece80c94a29b3/Results_R_Medium_1x.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "4163dd7b89fb62017be4772ae28fb4ada615ae1c4d03b13e0e4441ab7205af71",
+      "size": [
+        151,
+        208
+      ]
+    },
+    {
+      "id": "eero-signal-5g",
+      "model": "eero Signal 5G",
+      "file": "eero-signal-5g.png",
+      "source_url": "https://images.ctfassets.net/o8zdilputr65/2q3DpWSkyMvb729jniXIa9/5f86d2e126c2f3d30713e41a0f2d04bb/r5.png",
+      "source_page": "https://eero.com/shop",
+      "sha256": "4163dd7b89fb62017be4772ae28fb4ada615ae1c4d03b13e0e4441ab7205af71",
+      "size": [
+        151,
+        208
+      ]
+    },
+    {
+      "id": "eero-gen1",
+      "model": "eero (1st gen)",
+      "file": "eero-gen1.png",
+      "source_url": "https://eero.zendesk.com/hc/article_attachments/28711286497563",
+      "source_page": "https://eero.zendesk.com/hc/en-us/articles/207921253-Physical-tour-of-an-eero-What-are-all-the-ports-for",
+      "sha256": "4a7b1fb35d571f14891ad1af960bfe75956b49eeba5ed4ac37a47c9b865b7c38",
+      "size": [
+        384,
+        192
+      ]
+    },
+    {
+      "id": "eero-telephone-adapter",
+      "model": "eero Telephone Adapter",
+      "file": "eero-telephone-adapter.png",
+      "source_url": "https://www.aussiebroadband.com.au/img/hardware/eero/fh01/eero-fh01.webp",
+      "source_page": "https://www.aussiebroadband.com.au/internet/hardware/",
+      "sha256": "a89690a1005b0f3fac8cc256ba9904fc4b57c85b9a2ee4ac5a5185e7f72e1879",
+      "size": [
+        384,
+        141
+      ]
+    }
+  ]
+}

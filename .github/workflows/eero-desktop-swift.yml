@@ -1,0 +1,41 @@
+name: eero Desktop (Swift)
+
+on:
+  push:
+    paths:
+      - "eero-desktop-swift/**"
+      - ".github/workflows/eero-desktop-swift.yml"
+  pull_request:
+    paths:
+      - "eero-desktop-swift/**"
+      - ".github/workflows/eero-desktop-swift.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eero-desktop-swift-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: eero-desktop-swift
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test
+
+  linux-core:
+    runs-on: ubuntu-24.04
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test EeroCore
+        run: swift build && swift test

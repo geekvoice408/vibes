@@ -1,0 +1,289 @@
+eero Desktop v1.0 - feature coverage
+
+MENU MAP
+
+Home > Internet
+  Internet status, speed tests, WAN and backup connectivity
+  Evidence: TabBarMode, HomeViewModel
+
+Home > eeros
+  Node details, status lights, connections and restarts
+  Evidence: IEeroService
+
+Home > Profiles
+  Create profiles, assign devices, pause access and schedule pauses
+  Evidence: ProfileUpdateRequest, ScheduledPause
+
+Home > Security & privacy
+  Advanced Security, content filters, ad blocking and website controls
+  Evidence: DnsPolicySlug, INetworkService
+
+Home > Security & privacy > Content filters
+  Unified content filters for additional wifi subnets
+  Evidence: SubnetContentFiltersRequest
+
+Home > Add or replace eero
+  Add by serial number, discover nearby eeros and configure automatic setup
+  Evidence: IEeroService.addEeroWithSerial
+
+Home > Add or replace eero > Find nearby eeros
+  Native Bluetooth discovery and read-only eero identity checks
+  Evidence: EeroBleManagerLive, EeroUuids
+
+Home > Add or replace eero > Automatic setup
+  Cloud-discovered eeros and automatic setup preferences
+  Evidence: getAutoDiscoveredEeros, SetAutoSetupMode
+
+Home > Add or replace eero > Create a network
+  Create a wired DHCP network and claim its gateway by serial
+  Evidence: CreateNetworkRequest, IEeroService.addEeroWithSerial
+  Limitation: Not validated on unconfigured hardware; Bluetooth write provisioning and gateway replacement are incomplete.
+
+Home > eeros > Placement tests
+  Run cloud placement tests and review eero signal ratings
+  Evidence: runPlacementTest, PlacementResult
+
+Home > Security & privacy > VPN
+  Guardian device registration, locations, devices and Windows VPN controls
+  Evidence: GuardianVpnPetRequest, Guardian Connect API, WireGuard Windows
+
+Devices > Blocked devices
+  Review and unblock devices
+  Evidence: NetworkService.blockDevice, unblockDevice
+
+Activity > Data usage
+  Network data usage and device breakdown
+  Evidence: IDataUsageService
+
+Activity > Security activity
+  Threat and content-filter activity
+  Evidence: IInsightsService
+
+Activity > Network events
+  Recent network events
+  Evidence: INetworkService.getNetworkEvents
+
+Settings > Wifi name & password
+  View, change, copy, and share wifi details as a QR code
+  Evidence: NetworkResources.password
+
+Settings > Guest wifi network
+  Guest network access, credentials and QR sharing
+  Evidence: GuestNetwork, GuestResources
+
+Settings > Additional wifi networks
+  Additional SSIDs, guest and IoT access, bandwidth limits and subnet filters
+  Evidence: SubnetConfig
+
+Settings > Business guest wifi
+  Existing guest portal branding, session duration and visitor fields
+  Evidence: CaptivePortalConfigurationRequest
+
+Settings > Nickname & location
+  Network nickname and timezone
+  Evidence: NetworkService.updateBusinessNameOrNetworkNickname
+
+Settings > Advanced networking
+  DHCP, DNS, reservations, firewall, wireless and smart-home options
+  Evidence: SettingsRoute, INetworkService
+
+Settings > Advanced networking > Internet connection
+  WAN address, DHCP, static IP and PPPoE status
+  Evidence: Network.ip_settings, NetworkPppoeConfig
+
+Settings > Advanced networking > Internet connection > ISP settings
+  Existing-network PPPoE credentials and ISP VLAN tagging
+  Evidence: NetworkPppoeConfig, Network.vlan
+
+Settings > Advanced networking > DHCP & NAT
+  Automatic/manual addressing, bridge mode and NAT port randomization
+  Evidence: DhcpConfigurationRequest
+
+Settings > Advanced networking > DNS
+  ISP or custom DNS and local DNS caching
+  Evidence: Dns, HostInfoList
+
+Settings > Advanced networking > DNS > DNS performance
+  Compare resolver latency and review gateway DNS test results
+  Evidence: DnsPerfTestRequest, NetworkService.runDnsPerfTest
+
+Settings > Advanced networking > Reservations & port forwarding
+  IPv4 reservations, port mappings and IPv6 firewall rules
+  Evidence: NetRules, NetworkReservation, NetworkForward
+
+Settings > Advanced networking > IPv6
+  Enable or disable upstream IPv6
+  Evidence: Network.ipv6_upstream
+
+Settings > Advanced networking > UPnP
+  Automatic port mapping
+  Evidence: Network.upnp
+
+Settings > Advanced networking > Wireless settings
+  WPA3, client steering, optimization, compatibility and MLO
+  Evidence: Network, MultiLinkOperationModeRequest
+
+Settings > Advanced networking > Thread
+  Thread network and credential syncing
+  Evidence: UpdateThreadNetworkRequest
+
+Settings > Advanced networking > Dynamic DNS
+  eero DDNS access and hostname
+  Evidence: INetworkService.ddnsEnable, ddnsDisable
+
+Settings > Advanced networking > Power saving
+  Power optimization and scheduled power saving
+  Evidence: PowerOptimizationRequest, PowerSavingScheduleRequest
+
+Settings > Advanced networking > Internet backup
+  Backup access points and connectivity tests
+  Evidence: AddBackupNetworkRequest, BackupInternetEnabledRequest
+
+Settings > Advanced networking > Multi-WAN
+  WAN links, failover and secondary-WAN device access
+  Evidence: INetworkService.coGetWanLinks
+
+Settings > Advanced networking > Multiple static IPs
+  Public LAN and NAT public-address ranges
+  Evidence: MultiStaticIpRequest
+
+Settings > User permissions
+  Network members, admin invitations and revocation
+  Evidence: CreateInviteRequest, INetworkService.removeAdmin
+
+Settings > User permissions > Join a network
+  Review, accept or decline an eero invitation
+  Evidence: InviteQueryRequest, ExternalInviteRequest
+
+Settings > User permissions > Incoming access invitations
+  Review, accept or decline account access invitations
+  Evidence: MemberPromotionResponse, PromotionInviteRequest
+
+Settings > Software updates
+  Update status, install available firmware and preferred update hour
+  Evidence: NetworkUpdates, PreferredUpdateHour
+
+Settings > Appearance
+  Light, dark or Windows system appearance
+  Evidence: SettingsRoute.Appearance
+
+Settings > Notifications
+  Network notification preferences, history and Windows notifications
+  Evidence: NetworkNotifications, PushSettings
+
+Settings > Troubleshooting
+  Connection checks, diagnostics, coverage and upgrade scans
+  Evidence: INetworkService.wifiCoverageScan, wifiGenerationScan
+
+Settings > Troubleshooting > Guided diagnostics
+  Diagnose slow internet, offline service, dropped connections and red eeros
+  Evidence: HealthCheckSymptom, HealthCheckResults
+
+Settings > Troubleshooting > Connect a device
+  Temporarily pause and restore 5 GHz for device setup
+  Evidence: TemporaryFlags.hide_5g, updateTemporaryFlags
+
+Settings > Advanced networking > Wireless settings > Fast roaming
+  Review and configure fast transition compatibility
+  Evidence: FastTransitionStatus
+
+Settings > Advanced networking > Internet backup > Find backup wifi
+  Discover nearby backup wifi networks and add a selected result
+  Evidence: BackupNetworkDiscoveryStatusResponse
+
+Settings > Notifications > Windows notifications
+  Windows startup, background alerts and missed-update tracking
+  Evidence: Windows background notifications
+
+Settings > Account settings
+  Account details, name, verified email/phone changes and email preferences
+  Evidence: IUserService
+
+Settings > Account settings > Subscriptions
+  Subscription status, software-key activation and partner benefits
+  Evidence: IPremiumService, ActivateLicenseKeyRequestBody
+
+Settings > Account settings > Subscriptions > Redeem a license key
+  Validate a software key, review renewal and activate for a network
+  Evidence: ValidateLicenseKeyRequestBody, ActivateLicenseKeyRequestBody
+
+Settings > Account settings > Subscriptions > Partner benefits
+  1Password and Malwarebytes codes, benefit status and VPN seats
+  Evidence: IPremiumService
+
+Settings > Account settings > Subscriptions > Manage subscriptions & purchases
+  Official eero payment service using a temporary account token
+  Evidence: TemporaryExternalToken, TargetPage
+
+Settings > Account settings > Subscriptions > Offers & referrals
+  Eligible plan offers, referral links, referral email and referral status
+  Evidence: EeroPlusOfferRequest, SubscriptionReferralRequest
+
+Settings > Account settings > Subscriptions > Billing & status
+  Refresh benefits, payment methods and purchase history
+  Evidence: IPremiumService.getCustomer, TargetPage
+
+Settings > Account settings > Subscriptions > Business billing
+  Business payment-account management and onboarding
+  Evidence: PaymentAccountManagementResponse, PaymentAccountOnboardingResponse
+
+Home > Security & privacy > Identity protection
+  Identity protection activation, digital-footprint scans and email verification
+  Evidence: DigitalFootprintScanRequest, DigitalFootprintVerifyCodeRequest
+
+Settings > Connected services
+  Amazon, eero Built-in and connected-service status
+  Evidence: Network.proxied_nodes, simple_setup
+
+Settings > Connected services > Connected device setup
+  Review and configure per-vendor device setup permissions
+  Evidence: SimpleSetupNetworkConfiguration
+
+Settings > Connected services > Amazon connected home
+  Linked-account status, Zigbee discovery and account unlinking
+  Evidence: runZigbeeDeviceDiscovery, unlinkAmazonAccount
+
+Settings > Connected services > Accessories & cellular
+  Accessory setup status, details, removal and phone-line associations
+  Evidence: AccessoryStatus, Accessory, SipConfigAssociation
+
+Settings > Business guest wifi > eero Insight
+  Open the official business management portal
+  Evidence: SettingsViewModel.setupEeroInsight
+
+Settings > Network management
+  Network switching, ownership transfer and removal
+  Evidence: NetworkResources.transfer, deleteNetwork
+
+Settings > Network management > Pending transfers
+  Accept or decline incoming network transfers
+  Evidence: PendingTransfersData, acceptNetworkTransfer, denyNetworkTransfer
+
+Settings > Network management > Outgoing transfer
+  Review, resend or cancel a pending ownership invitation
+  Evidence: getTransferNetworkInvite, resendTransferNetwork
+
+Settings > About
+  Version, sources, capabilities and compatibility information
+  Evidence: Feature inventory
+
+Home > Chat
+  Streaming eero chat, recommendations and permission requests
+  Evidence: IConversationsService, ConversationStreamingService
+
+Help > Support history
+  Read and continue previous eero conversations
+  Evidence: ConversationsResponse, ConversationResponse
+
+Help > Contact support
+  Account-specific chat, help links and contact information
+  Evidence: SupportInfo, SupportInfoItem, TYPE.CHAT
+
+Help
+  Official support, support details and feature availability
+  Evidence: TabBarMode.Troubleshooting
+
+Help > Service availability
+  Account, hardware and service requirements
+  Evidence: Service integrations
+  Limitation: Full Bluetooth provisioning and gateway replacement are unavailable. Amazon sign-in requires an existing eero account using the same Amazon login; Email/phone sign-in remains available for accounts that use it. Purchases remain managed by their billing provider. Guardian VPN needs an eligible account, the Windows WireGuard component and administrator approval.
