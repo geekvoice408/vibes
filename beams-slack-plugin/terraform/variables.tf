@@ -64,7 +64,7 @@ variable "plugin_image" {
 variable "tbot_image" {
   description = "tbot image."
   type        = string
-  default     = "public.ecr.aws/gravitational/tbot-distroless:18.11.3"
+  default     = "public.ecr.aws/gravitational/tbot-distroless:18"
 }
 
 variable "name_prefix" {

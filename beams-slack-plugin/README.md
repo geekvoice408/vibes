@@ -10,10 +10,10 @@ servers and apps through Teleport, keeps the right people informed, and asks
 before it changes anything. Everything runs as you and lands in Teleport's
 audit log. There's also a `/beams` slash command for direct control.
 
-It is Teleport's Slack access plugin with a Beams app added. It is built from
-the Teleport `v18.11.1` source (the newest public v18.11 tag) and ships with
-`tsh` 18.11.3; the `tbot` sidecar runs 18.11.3 too. See
-[Versions](#versions). It runs as a container next to `tbot`, talks to Slack
+It is Teleport's Slack access plugin with a Beams app added. Each build uses
+Teleport's newest public source tag, the newest published `tsh` in that major,
+and the Go toolchain that Teleport release declares; the `tbot` sidecar tracks
+the `:18` image tag. See [Versions](#versions). It runs as a container next to `tbot`, talks to Slack
 over Socket Mode, and needs no inbound ports or public URL.
 
 **[Usage](#usage)** · **[Request log](#request-log)** · **[Installation](#installation)** ·
@@ -693,19 +693,25 @@ tags `latest`, `main`, and `sha-<commit>`. That package is not publicly
 accessible, so use your own registry as described in
 [Build and host the image](#3-build-and-host-the-image). If GitHub Actions is
 unavailable, [build on the Docker host](#building-on-the-docker-host-instead)
-instead. The image bundles
-`tsh` 18.11.3; override the `TSH_VERSION` build argument when the tenant is
-upgraded.
+instead. The image bundles the newest published `tsh` at build time, so rebuild
+to pick up a newer one.
 
 ## Versions
 
-| Piece | Version | Set in |
-| --- | --- | --- |
-| Plugin source (`teleport.patch` base) | `v18.11.1` | `Dockerfile` `TELEPORT_REF` |
-| Bundled `tsh` | 18.11.3 | `Dockerfile` `TSH_VERSION` |
-| `tbot` sidecar | 18.11.3 | `docker-compose.yml` |
+Nothing is pinned. Every version is resolved when the image is built:
 
-Teleport published 18.11.3 binaries without a public `v18.11.3` source tag,
-so the plugin is built from `v18.11.1`, the newest tag available. Mixing patch
-releases within 18.11 is supported. Move `TELEPORT_REF` (and rebase
-`teleport.patch`) when a newer tag is published.
+| Piece | Resolves to | Override |
+| --- | --- | --- |
+| Plugin source (`teleport.patch` base) | Teleport's newest `vX.Y.Z` tag | `--build-arg TELEPORT_REF=vX.Y.Z` |
+| Go toolchain | the `toolchain`/`go` line in Teleport's `go.mod` at that tag | none |
+| Bundled `tsh` | newest release on cdn.teleport.dev in the same major | `--build-arg TSH_VERSION=X.Y.Z` |
+| `tbot` sidecar | `tbot-distroless:18` (moves with every 18.x release) | `docker-compose.yml` / `tbot_image` |
+
+Teleport often publishes binaries before the matching source tag, so `tsh` can
+be a few patches ahead of the plugin source; mixing patch releases within a
+major is supported. Go is taken from Teleport rather than the newest release
+because a dependency (`charlievieth/strcase`) panics at startup under Go 1.27.
+If a new Teleport tag makes `git apply teleport.patch` fail, the build stops at
+that step: rebase the patch onto the new tag (see [Development](#development)).
+When Teleport ships a new major, change the `tbot` tag to that major; there is
+no `latest` tag for tbot.

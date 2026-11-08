@@ -2,7 +2,7 @@ services:
   # Named volumes start out owned by root; hand them to the UID both
   # containers run as so tbot can write and the plugin can read.
   volume-init:
-    image: busybox:1.37
+    image: busybox:latest
     command: ["chown", "-R", "10001:10001", "/var/lib/tbot", "/identity", "/beams"]
     volumes:
       - tbot-state:/var/lib/tbot
@@ -11,7 +11,7 @@ services:
     restart: "no"
 
   tbot:
-    image: public.ecr.aws/gravitational/tbot-distroless:18.11.3
+    image: public.ecr.aws/gravitational/tbot-distroless:18
     command: ["start", "-c", "/etc/tbot.yaml"]
     user: "10001:10001"
     restart: unless-stopped
