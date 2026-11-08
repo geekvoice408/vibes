@@ -21,7 +21,7 @@ resource "docker_volume" "beams_profiles" {
 }
 
 resource "docker_image" "busybox" {
-  name         = "busybox:1.37"
+  name         = "busybox:latest"
   keep_locally = true
 }
 
